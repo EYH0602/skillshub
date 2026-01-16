@@ -11,6 +11,13 @@ pub const DEFAULT_TAP_NAME: &str = "skillshub";
 /// Default tap URL (this repository)
 pub const DEFAULT_TAP_URL: &str = "https://github.com/yfhe/skillshub";
 
+/// Default tap name for Anthropics skills
+pub const ANTHROPIC_TAP_NAME: &str = "anthropics";
+
+/// Default tap URL for Anthropics skills (pinned commit)
+pub const ANTHROPIC_TAP_URL: &str =
+    "https://github.com/anthropics/skills/tree/69c0b1a0674149f27b61b2635f935524b6add202";
+
 /// Get the path to the database file (~/.skillshub/db.json)
 pub fn get_db_path() -> Result<PathBuf> {
     Ok(get_skillshub_home()?.join("db.json"))
@@ -49,21 +56,49 @@ pub fn save_db(db: &Database) -> Result<()> {
     Ok(())
 }
 
-/// Initialize the database with the default tap if it doesn't exist
-pub fn init_db() -> Result<Database> {
-    let mut db = load_db()?;
-
-    // Add default tap if not present
-    if !db.taps.contains_key(DEFAULT_TAP_NAME) {
-        db.taps.insert(
-            DEFAULT_TAP_NAME.to_string(),
+fn default_taps() -> Vec<(&'static str, TapInfo)> {
+    vec![
+        (
+            DEFAULT_TAP_NAME,
             TapInfo {
                 url: DEFAULT_TAP_URL.to_string(),
                 skills_path: "skills".to_string(),
                 updated_at: None,
                 is_default: true,
+                is_bundled: true,
             },
-        );
+        ),
+        (
+            ANTHROPIC_TAP_NAME,
+            TapInfo {
+                url: ANTHROPIC_TAP_URL.to_string(),
+                skills_path: "skills".to_string(),
+                updated_at: None,
+                is_default: true,
+                is_bundled: false,
+            },
+        ),
+    ]
+}
+
+fn ensure_default_taps(db: &mut Database) -> bool {
+    let mut changed = false;
+
+    for (name, tap) in default_taps() {
+        if !db.taps.contains_key(name) {
+            db.taps.insert(name.to_string(), tap);
+            changed = true;
+        }
+    }
+
+    changed
+}
+
+/// Initialize the database with the default tap if it doesn't exist
+pub fn init_db() -> Result<Database> {
+    let mut db = load_db()?;
+
+    if ensure_default_taps(&mut db) {
         save_db(&db)?;
     }
 
@@ -129,6 +164,24 @@ mod tests {
     }
 
     #[test]
+    fn test_ensure_default_taps() {
+        let mut db = Database::default();
+        assert!(ensure_default_taps(&mut db));
+        assert!(db.taps.contains_key(DEFAULT_TAP_NAME));
+        assert!(db.taps.contains_key(ANTHROPIC_TAP_NAME));
+
+        let bundled = db.taps.get(DEFAULT_TAP_NAME).unwrap();
+        assert!(bundled.is_default);
+        assert!(bundled.is_bundled);
+
+        let anthropic = db.taps.get(ANTHROPIC_TAP_NAME).unwrap();
+        assert!(anthropic.is_default);
+        assert!(!anthropic.is_bundled);
+
+        assert!(!ensure_default_taps(&mut db));
+    }
+
+    #[test]
     fn test_is_skill_installed() {
         let mut db = Database::default();
         assert!(!is_skill_installed(&db, "tap/skill"));
@@ -180,6 +233,7 @@ mod tests {
             skills_path: "skills".to_string(),
             updated_at: None,
             is_default: false,
+            is_bundled: false,
         };
 
         add_tap(&mut db, "my-tap", tap);

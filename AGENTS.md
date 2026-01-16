@@ -88,10 +88,13 @@ skillshub install <tap/skill>[@commit]      # Install a skill
 skillshub uninstall <tap/skill>             # Remove installed skill
 skillshub update [tap/skill]                # Update skill(s) to latest
 skillshub info <tap/skill>                  # Show skill details
-skillshub install-all                       # Install all from default tap
+skillshub install-all                       # Install all from default taps
 ```
 
 ### Tap Management
+
+Default taps include `skillshub` (bundled) and `anthropics` (remote).
+
 ```bash
 skillshub tap list                          # List configured taps
 # Skills column shows installed/available counts (e.g., 2/15 or 1/?)

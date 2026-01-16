@@ -26,9 +26,13 @@ pub struct TapInfo {
     /// When the tap registry was last updated
     pub updated_at: Option<DateTime<Utc>>,
 
-    /// Whether this is the default tap (bundled with skillshub)
+    /// Whether this tap is preconfigured by default
     #[serde(default)]
     pub is_default: bool,
+
+    /// Whether this tap is bundled locally with the binary
+    #[serde(default)]
+    pub is_bundled: bool,
 }
 
 /// Information about an installed skill
@@ -257,6 +261,7 @@ mod tests {
             skills_path: "skills".to_string(),
             updated_at: None,
             is_default: false,
+            is_bundled: false,
         };
 
         let json = serde_json::to_string(&tap).unwrap();

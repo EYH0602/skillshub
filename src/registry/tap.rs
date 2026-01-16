@@ -7,7 +7,7 @@ use tabled::{
 };
 
 use super::db::{self, DEFAULT_TAP_NAME};
-use super::github::{fetch_tap_registry, parse_github_url};
+use super::github::{fetch_directory_registry, fetch_tap_registry, parse_github_url};
 use super::models::{Database, TapInfo, TapRegistry};
 use crate::util::truncate_string;
 
@@ -59,6 +59,7 @@ pub fn add_tap(url: &str) -> Result<()> {
         skills_path: "skills".to_string(), // Default, could be configured
         updated_at: Some(Utc::now()),
         is_default: false,
+        is_bundled: false,
     };
 
     db::add_tap(&mut db, &tap_name, tap_info);
@@ -136,12 +137,12 @@ pub fn list_taps() -> Result<()> {
 
     for (name, tap) in &db.taps {
         let installed_count = count_installed_skills(&db, name);
-        let available_count = if tap.is_default {
-            // For default tap, count local skills
+        let available_count = if tap.is_bundled {
             count_local_skills().ok()
         } else {
-            // For remote taps, try to get from registry
-            get_tap_skill_count(tap).ok()
+            get_tap_registry(&db, name)
+                .ok()
+                .map(|registry| registry.skills.len())
         };
         let skills_count = format_skills_count(installed_count, available_count);
 
@@ -154,14 +155,11 @@ pub fn list_taps() -> Result<()> {
     }
 
     // Sort with default tap first
-    rows.sort_by(|a, b| {
-        if a.is_default == "✓" {
-            std::cmp::Ordering::Less
-        } else if b.is_default == "✓" {
-            std::cmp::Ordering::Greater
-        } else {
-            a.name.cmp(&b.name)
-        }
+    rows.sort_by(|a, b| match (a.is_default == "✓", b.is_default == "✓") {
+        (true, true) => a.name.cmp(&b.name),
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        (false, false) => a.name.cmp(&b.name),
     });
 
     let table = Table::new(rows)
@@ -236,13 +234,6 @@ fn update_single_tap(name: &str, tap: &TapInfo) -> Result<usize> {
     Ok(registry.skills.len())
 }
 
-/// Get skill count from a tap's registry
-fn get_tap_skill_count(tap: &TapInfo) -> Result<usize> {
-    let github_url = parse_github_url(&tap.url)?;
-    let registry = fetch_tap_registry(&github_url, "registry.json")?;
-    Ok(registry.skills.len())
-}
-
 /// Count local skills in the embedded directory
 fn count_local_skills() -> Result<usize> {
     use crate::paths::get_embedded_skills_dir;
@@ -270,9 +261,12 @@ fn format_skills_count(installed: usize, available: Option<usize>) -> String {
 pub fn get_tap_registry(db: &Database, tap_name: &str) -> Result<TapRegistry> {
     let tap = db::get_tap(db, tap_name).with_context(|| format!("Tap '{}' not found", tap_name))?;
 
-    if tap.is_default {
+    if tap.is_bundled {
         // Generate registry from local skills
         generate_local_registry()
+    } else if tap.is_default {
+        let github_url = parse_github_url(&tap.url)?;
+        fetch_directory_registry(&github_url, tap_name, &tap.skills_path)
     } else {
         // Fetch from remote
         let github_url = parse_github_url(&tap.url)?;
