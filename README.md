@@ -1,6 +1,13 @@
 # Skillshub
 
-A package manager for AI coding agent skills - like Homebrew for skills.
+Skillshub is a package manager for AI coding agent skills. 
+Install skills once and link them to every detected agent so all of your agents stay in sync.
+
+## Why Skillshub
+
+- One install, many agents: a single skills registry in `~/.skillshub/skills`
+- One command to sync: `skillshub link` wires skills into all detected agents
+- Clear skill format: each skill lives in its own folder with `SKILL.md` metadata
 
 ## Installation
 
@@ -18,33 +25,27 @@ cd skillshub
 cargo install --path .
 ```
 
-## Usage
-
-### Install Skills
+## Quick Start
 
 ```bash
-# Install all available skills to ~/.skillshub
+# Install all available skills
 skillshub install-all
 
-# Install a specific skill
-skillshub install code-reviewer
-```
-
-### Link to Coding Agents
-
-```bash
-# Link installed skills to all detected coding agents
+# Link installed skills to every detected agent
 skillshub link
 
-# Show detected agents and their link status
+# See which agents were detected
 skillshub agents
 ```
 
-### Manage Skills
+## Common Commands
 
 ```bash
 # List all available skills
 skillshub list
+
+# Install a specific skill
+skillshub install code-reviewer
 
 # Show detailed info about a skill
 skillshub info code-reviewer
@@ -57,20 +58,22 @@ skillshub uninstall code-reviewer
 
 Skillshub automatically detects and links to these coding agents:
 
-- `.claude` (Claude Code)
-- `.codex` (OpenAI Codex)
-- `.opencode` (OpenCode)
-- `.aider` (Aider)
-- `.cursor` (Cursor)
-- `.continue` (Continue)
+| Agent    | Directory     | Skills Path          |
+| -------- | ------------- | -------------------- |
+| Claude   | `~/.claude`   | `~/.claude/skills`   |
+| Codex    | `~/.codex`    | `~/.codex/skills`    |
+| OpenCode | `~/.opencode` | `~/.opencode/skill`  |
+| Aider    | `~/.aider`    | `~/.aider/skills`    |
+| Cursor   | `~/.cursor`   | `~/.cursor/skills`   |
+| Continue | `~/.continue` | `~/.continue/skills` |
 
 ## How It Works
 
 1. Skills are installed to `~/.skillshub/skills/`
-2. Running `skillshub link` creates symlinks from each agent's `.skills` directory to the installed skills
-3. Each skill contains a `SKILL.md` with metadata and instructions, plus optional scripts and references
+2. Running `skillshub link` creates symlinks from each agent's skills directory to the installed skills
+3. Re-run `skillshub link` any time to keep all agents synchronized
 
-## Adding New Skills
+## Skill Format
 
 Create a new directory under `skills/` with a `SKILL.md` file:
 
