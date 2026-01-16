@@ -44,7 +44,7 @@ skillshub/
 - **Registry**: A `registry.json` file in each tap listing available skills
 - **Database**: `~/.skillshub/db.json` tracks installed skills and their versions
 - **Installation**: Skills are downloaded/copied to `~/.skillshub/skills/<tap>/<skill>/`
-- **Linking**: Symlinks are created from agent directories to installed skills
+- **Linking**: Per-skill symlinks are created from agent skill directories
 - **Agents**: Coding assistants like Claude, Codex, OpenCode, Aider, Cursor, Continue
 
 ## Data Flow

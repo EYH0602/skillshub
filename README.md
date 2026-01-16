@@ -136,7 +136,7 @@ Skillshub automatically detects and links to these coding agents:
 
 1. Skills are organized by source: `~/.skillshub/skills/<repo-or-tap>/<skill>/`
 2. A database at `~/.skillshub/db.json` tracks installed skills and their versions
-3. Running `skillshub link` creates symlinks from each agent's skills directory
+3. Running `skillshub link` creates per-skill symlinks in each agent's skills directory
 4. Re-run `skillshub link` any time to keep all agents synchronized
 
 ## Skill Format
