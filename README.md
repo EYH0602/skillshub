@@ -1,15 +1,15 @@
-# [WIP] Skillshub
+# Skillshub
 
-Skillshub is a package manager for AI coding agent skills. 
+Skillshub is a package manager for AI coding agent skills - like Homebrew for skills.
 Install skills once and link them to every detected agent so all of your agents stay in sync.
-
-NOTE: work in progress and currently missing feature. VERY buggy.
 
 ## Why Skillshub
 
-- One install, many agents: a single skills registry in `~/.skillshub/skills`
-- One command to sync: `skillshub link` wires skills into all detected agents
-- Clear skill format: each skill lives in its own folder with `SKILL.md` metadata
+- **Tap-based registry**: Install skills from multiple sources (like Homebrew taps)
+- **One install, many agents**: A single skills registry in `~/.skillshub/skills`
+- **One command to sync**: `skillshub link` wires skills into all detected agents
+- **Version tracking**: Track which commit each skill was installed from
+- **Clear skill format**: Each skill lives in its own folder with `SKILL.md` metadata
 
 ## Installation
 
@@ -22,7 +22,7 @@ cargo install skillshub
 ### From Source
 
 ```bash
-git clone https://github.com/EYH0602/skillshub skillshub
+git clone https://github.com/yfhe/skillshub
 cd skillshub
 cargo install --path .
 ```
@@ -30,8 +30,14 @@ cargo install --path .
 ## Quick Start
 
 ```bash
-# Install all available skills
-skillshub install-all
+# List available taps
+skillshub tap list
+
+# List all available skills
+skillshub list
+
+# Install a skill (format: tap/skill)
+skillshub install skillshub/code-reviewer
 
 # Link installed skills to every detected agent
 skillshub link
@@ -40,20 +46,64 @@ skillshub link
 skillshub agents
 ```
 
-## Common Commands
+## Commands
+
+### Skill Management
 
 ```bash
-# List all available skills
+# List all available skills from all taps
 skillshub list
 
-# Install a specific skill
-skillshub install code-reviewer
+# Search for skills
+skillshub search python
+
+# Install a skill (format: tap/skill)
+skillshub install skillshub/code-reviewer
+
+# Install a specific version (by commit)
+skillshub install skillshub/code-reviewer@abc1234
 
 # Show detailed info about a skill
-skillshub info code-reviewer
+skillshub info skillshub/code-reviewer
+
+# Update installed skills to latest version
+skillshub update                           # Update all
+skillshub update skillshub/code-reviewer   # Update one
 
 # Uninstall a skill
-skillshub uninstall code-reviewer
+skillshub uninstall skillshub/code-reviewer
+
+# Install all skills from the default tap
+skillshub install-all
+```
+
+### Tap Management
+
+Taps are repositories that contain skills. The default `skillshub` tap is included.
+
+```bash
+# List configured taps
+skillshub tap list
+
+# Add a third-party tap
+skillshub tap add https://github.com/user/my-skills-tap
+
+# Update tap registries
+skillshub tap update            # Update all taps
+skillshub tap update my-tap     # Update specific tap
+
+# Remove a tap
+skillshub tap remove my-tap
+```
+
+### Agent Linking
+
+```bash
+# Link installed skills to all detected agents
+skillshub link
+
+# Show which agents are detected
+skillshub agents
 ```
 
 ## Supported Agents
@@ -71,13 +121,29 @@ Skillshub automatically detects and links to these coding agents:
 
 ## How It Works
 
-1. Skills are installed to `~/.skillshub/skills/`
-2. Running `skillshub link` creates symlinks from each agent's skills directory to the installed skills
-3. Re-run `skillshub link` any time to keep all agents synchronized
+1. Skills are organized by tap: `~/.skillshub/skills/<tap>/<skill>/`
+2. A database at `~/.skillshub/db.json` tracks installed skills and their versions
+3. Running `skillshub link` creates symlinks from each agent's skills directory
+4. Re-run `skillshub link` any time to keep all agents synchronized
 
-## Skill Format
+## Creating a Tap
 
-Create a new directory under `skills/` with a `SKILL.md` file:
+A tap is a GitHub repository with a `registry.json` file:
+
+```json
+{
+  "name": "my-tap",
+  "description": "My custom skills collection",
+  "skills": {
+    "my-skill": {
+      "path": "skills/my-skill",
+      "description": "What this skill does"
+    }
+  }
+}
+```
+
+Each skill referenced in the registry should have a `SKILL.md` file:
 
 ```yaml
 ---
@@ -93,3 +159,11 @@ Instructions for the AI agent...
 Optional subdirectories:
 - `scripts/` - Executable scripts the agent can run
 - `references/` - Documentation to be loaded into context
+
+## Migration
+
+If you have an existing installation from before the tap system was introduced, skillshub will automatically migrate your skills on the first run. You can also run migration manually:
+
+```bash
+skillshub migrate
+```

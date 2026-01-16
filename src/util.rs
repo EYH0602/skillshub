@@ -3,15 +3,6 @@ use std::fs;
 use std::path::Path;
 use walkdir::WalkDir;
 
-/// Truncate a string to max length with ellipsis
-pub fn truncate_string(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
-        s.to_string()
-    } else {
-        format!("{}...", &s[..max_len.saturating_sub(3)])
-    }
-}
-
 /// Recursively copy a directory
 pub fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
     fs::create_dir_all(dst)?;
@@ -40,31 +31,6 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
-
-    #[test]
-    fn test_truncate_string_short() {
-        assert_eq!(truncate_string("hello", 10), "hello");
-    }
-
-    #[test]
-    fn test_truncate_string_exact() {
-        assert_eq!(truncate_string("hello", 5), "hello");
-    }
-
-    #[test]
-    fn test_truncate_string_long() {
-        assert_eq!(truncate_string("hello world", 8), "hello...");
-    }
-
-    #[test]
-    fn test_truncate_string_empty() {
-        assert_eq!(truncate_string("", 5), "");
-    }
-
-    #[test]
-    fn test_truncate_string_very_short_max() {
-        assert_eq!(truncate_string("hello", 3), "...");
-    }
 
     #[test]
     fn test_copy_dir_recursive() {

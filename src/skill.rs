@@ -2,7 +2,6 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::fs;
 use std::path::{Path, PathBuf};
-use tabled::Tabled;
 
 /// Skill metadata parsed from SKILL.md frontmatter
 #[derive(Debug, Deserialize)]
@@ -67,21 +66,10 @@ pub struct Skill {
     pub name: String,
     pub description: String,
     pub path: PathBuf,
+    #[allow(dead_code)]
     pub has_scripts: bool,
+    #[allow(dead_code)]
     pub has_references: bool,
-}
-
-/// Table row for displaying skills
-#[derive(Tabled)]
-pub struct SkillRow {
-    #[tabled(rename = " ")]
-    pub status: &'static str,
-    #[tabled(rename = "Name")]
-    pub name: String,
-    #[tabled(rename = "Description")]
-    pub description: String,
-    #[tabled(rename = "Extras")]
-    pub extras: String,
 }
 
 /// Parse skill metadata from SKILL.md file
