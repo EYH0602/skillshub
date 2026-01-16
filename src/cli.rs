@@ -12,7 +12,7 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Install all skills from the default tap
+    /// Install all skills from default taps
     InstallAll,
 
     /// Install a skill (format: tap/skill[@commit])

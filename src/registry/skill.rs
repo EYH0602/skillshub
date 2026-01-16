@@ -6,7 +6,7 @@ use tabled::{
     Table, Tabled,
 };
 
-use super::db::{self, DEFAULT_TAP_NAME};
+use super::db;
 use super::github::{download_skill, get_latest_commit, parse_github_url};
 use super::models::{InstalledSkill, SkillId};
 use super::tap::get_tap_registry;
@@ -81,7 +81,7 @@ pub fn install_skill(full_name: &str) -> Result<()> {
     let dest = install_dir.join(&skill_id.tap).join(&skill_id.skill);
     std::fs::create_dir_all(&dest)?;
 
-    let (commit, is_local) = if tap.is_default {
+    let (commit, is_local) = if tap.is_bundled {
         // Install from local/bundled source
         install_from_local(&skill_id.skill, &dest)?
     } else {
@@ -196,6 +196,7 @@ pub fn add_skill_from_url(url: &str) -> Result<()> {
             skills_path: "skills".to_string(),
             updated_at: Some(Utc::now()),
             is_default: false,
+            is_bundled: false,
         };
         db::add_tap(&mut db, &tap_name, tap_info);
     }
@@ -706,38 +707,59 @@ pub fn show_skill_info(full_name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Install all skills from default tap
+/// Install all skills from default taps
 pub fn install_all() -> Result<()> {
     let db = db::init_db()?;
 
-    let registry = get_tap_registry(&db, DEFAULT_TAP_NAME)?;
+    let mut default_taps: Vec<String> = db
+        .taps
+        .iter()
+        .filter(|(_, tap)| tap.is_default)
+        .map(|(name, _)| name.clone())
+        .collect();
+    default_taps.sort();
 
-    if registry.skills.is_empty() {
-        println!("No skills available in default tap.");
+    if default_taps.is_empty() {
+        println!("No default taps configured.");
         return Ok(());
     }
 
-    println!(
-        "{} Installing {} skills from '{}'",
-        "=>".green().bold(),
-        registry.skills.len(),
-        DEFAULT_TAP_NAME
-    );
-
     let mut installed_count = 0;
 
-    for skill_name in registry.skills.keys() {
-        let full_name = format!("{}/{}", DEFAULT_TAP_NAME, skill_name);
+    for tap_name in default_taps {
+        let registry = match get_tap_registry(&db, &tap_name) {
+            Ok(r) => r,
+            Err(e) => {
+                println!("  {} {} ({})", "✗".red(), tap_name, e);
+                continue;
+            }
+        };
 
-        if db::is_skill_installed(&db, &full_name) {
-            println!("  {} {} (already installed)", "○".yellow(), full_name);
+        if registry.skills.is_empty() {
+            println!("No skills available in default tap '{}'.", tap_name);
             continue;
         }
 
-        match install_skill(&full_name) {
-            Ok(()) => installed_count += 1,
-            Err(e) => {
-                println!("  {} {} ({})", "✗".red(), full_name, e);
+        println!(
+            "{} Installing {} skills from '{}'",
+            "=>".green().bold(),
+            registry.skills.len(),
+            tap_name
+        );
+
+        for skill_name in registry.skills.keys() {
+            let full_name = format!("{}/{}", tap_name, skill_name);
+
+            if db::is_skill_installed(&db, &full_name) {
+                println!("  {} {} (already installed)", "○".yellow(), full_name);
+                continue;
+            }
+
+            match install_skill(&full_name) {
+                Ok(()) => installed_count += 1,
+                Err(e) => {
+                    println!("  {} {} ({})", "✗".red(), full_name, e);
+                }
             }
         }
     }

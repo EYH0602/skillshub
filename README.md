@@ -34,8 +34,9 @@ cargo install --path .
 # Add a skill directly from a GitHub URL (easiest way)
 skillshub add https://github.com/vercel-labs/agent-skills/tree/main/skills/react-best-practices
 
-# Or install from the default tap
+# Or install from the default taps
 skillshub install skillshub/code-reviewer
+skillshub install anthropics/<skill-name>
 
 # Link installed skills to every detected agent
 skillshub link
@@ -85,13 +86,13 @@ skillshub update skillshub/code-reviewer   # Update one
 # Uninstall a skill
 skillshub uninstall skillshub/code-reviewer
 
-# Install all skills from the default tap
+# Install all skills from the default taps
 skillshub install-all
 ```
 
 ### Tap Management (Optional)
 
-Taps are repositories that contain skills with a registry. The default `skillshub` tap is included.
+Taps are repositories that provide skills (typically via a registry.json). Default taps include `skillshub` (bundled) and `anthropics` (remote).
 
 ```bash
 # List configured taps

@@ -1,11 +1,13 @@
 use anyhow::{Context, Result};
 use flate2::read::GzDecoder;
+use serde::Deserialize;
+use std::collections::HashMap;
 use std::fs;
 use std::io::Cursor;
 use std::path::Path;
 use tar::Archive;
 
-use super::models::{GitHubUrl, TapRegistry};
+use super::models::{GitHubUrl, SkillEntry, TapRegistry};
 
 /// User agent for API requests
 const USER_AGENT: &str = "skillshub";
@@ -82,6 +84,81 @@ pub fn fetch_tap_registry(github_url: &GitHubUrl, registry_path: &str) -> Result
         .with_context(|| "Failed to parse registry.json")?;
 
     Ok(registry)
+}
+
+#[derive(Debug, Deserialize)]
+struct GitHubContentEntry {
+    name: String,
+    path: String,
+    #[serde(rename = "type")]
+    entry_type: String,
+}
+
+fn build_directory_registry(
+    tap_name: &str,
+    description: Option<String>,
+    entries: &[GitHubContentEntry],
+) -> TapRegistry {
+    let mut skills = HashMap::new();
+
+    for entry in entries.iter().filter(|entry| entry.entry_type == "dir") {
+        skills.insert(
+            entry.name.clone(),
+            SkillEntry {
+                path: entry.path.clone(),
+                description: None,
+                homepage: None,
+            },
+        );
+    }
+
+    TapRegistry {
+        name: tap_name.to_string(),
+        description,
+        skills,
+    }
+}
+
+/// Fetch a tap registry by listing a skills directory
+pub fn fetch_directory_registry(
+    github_url: &GitHubUrl,
+    tap_name: &str,
+    skills_path: &str,
+) -> Result<TapRegistry> {
+    let api_url = format!(
+        "{}/contents/{}?ref={}",
+        github_url.api_url(),
+        skills_path,
+        github_url.branch
+    );
+
+    let client = reqwest::blocking::Client::builder()
+        .user_agent(USER_AGENT)
+        .build()?;
+
+    let response = client
+        .get(&api_url)
+        .send()
+        .with_context(|| format!("Failed to fetch skills from {}", api_url))?;
+
+    if !response.status().is_success() {
+        anyhow::bail!(
+            "Failed to fetch skills directory: HTTP {} from {}",
+            response.status(),
+            api_url
+        );
+    }
+
+    let entries: Vec<GitHubContentEntry> = response
+        .json()
+        .with_context(|| "Failed to parse skills directory listing")?;
+
+    let description = Some(format!(
+        "Default skills from {}/{}",
+        github_url.owner, github_url.repo
+    ));
+
+    Ok(build_directory_registry(tap_name, description, &entries))
 }
 
 /// Get the latest commit SHA for a path in a repository
@@ -218,6 +295,32 @@ fn copy_dir_contents(src: &Path, dst: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_build_directory_registry_filters_dirs() {
+        let entries = vec![
+            GitHubContentEntry {
+                name: "skill-one".to_string(),
+                path: "skills/skill-one".to_string(),
+                entry_type: "dir".to_string(),
+            },
+            GitHubContentEntry {
+                name: "README.md".to_string(),
+                path: "skills/README.md".to_string(),
+                entry_type: "file".to_string(),
+            },
+        ];
+
+        let registry = build_directory_registry("anthropics", None, &entries);
+
+        assert_eq!(registry.name, "anthropics");
+        assert!(registry.skills.contains_key("skill-one"));
+        assert!(!registry.skills.contains_key("README.md"));
+        assert_eq!(
+            registry.skills.get("skill-one").unwrap().path,
+            "skills/skill-one"
+        );
+    }
 
     #[test]
     fn test_parse_github_url_simple() {
