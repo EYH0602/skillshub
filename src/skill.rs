@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tabled::Tabled;
 
 /// Skill metadata parsed from SKILL.md frontmatter
@@ -85,7 +85,7 @@ pub struct SkillRow {
 }
 
 /// Parse skill metadata from SKILL.md file
-pub fn parse_skill_metadata(skill_md_path: &PathBuf) -> Result<SkillMetadata> {
+pub fn parse_skill_metadata(skill_md_path: &Path) -> Result<SkillMetadata> {
     let content = fs::read_to_string(skill_md_path)
         .with_context(|| format!("Failed to read {}", skill_md_path.display()))?;
 
@@ -110,7 +110,7 @@ pub fn parse_skill_metadata(skill_md_path: &PathBuf) -> Result<SkillMetadata> {
 }
 
 /// Discover all skills in a directory
-pub fn discover_skills(skills_dir: &PathBuf) -> Result<Vec<Skill>> {
+pub fn discover_skills(skills_dir: &Path) -> Result<Vec<Skill>> {
     let mut skills = Vec::new();
 
     if !skills_dir.exists() {
@@ -159,4 +159,163 @@ pub fn discover_skills(skills_dir: &PathBuf) -> Result<Vec<Skill>> {
 
     skills.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(skills)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_parse_skill_metadata_basic() {
+        let dir = TempDir::new().unwrap();
+        let skill_md = dir.path().join("SKILL.md");
+        fs::write(
+            &skill_md,
+            r#"---
+name: test-skill
+description: A test skill
+---
+# Test Skill
+Some content here.
+"#,
+        )
+        .unwrap();
+
+        let metadata = parse_skill_metadata(&skill_md).unwrap();
+        assert_eq!(metadata.name, "test-skill");
+        assert_eq!(metadata.description, Some("A test skill".to_string()));
+    }
+
+    #[test]
+    fn test_parse_skill_metadata_with_allowed_tools_string() {
+        let dir = TempDir::new().unwrap();
+        let skill_md = dir.path().join("SKILL.md");
+        fs::write(
+            &skill_md,
+            r#"---
+name: test-skill
+description: A test skill
+allowed-tools: Tool1, Tool2, Tool3
+---
+# Test
+"#,
+        )
+        .unwrap();
+
+        let metadata = parse_skill_metadata(&skill_md).unwrap();
+        assert_eq!(metadata.allowed_tools.0, vec!["Tool1", "Tool2", "Tool3"]);
+    }
+
+    #[test]
+    fn test_parse_skill_metadata_with_allowed_tools_array() {
+        let dir = TempDir::new().unwrap();
+        let skill_md = dir.path().join("SKILL.md");
+        fs::write(
+            &skill_md,
+            r#"---
+name: test-skill
+allowed-tools:
+  - Tool1
+  - Tool2
+---
+# Test
+"#,
+        )
+        .unwrap();
+
+        let metadata = parse_skill_metadata(&skill_md).unwrap();
+        assert_eq!(metadata.allowed_tools.0, vec!["Tool1", "Tool2"]);
+    }
+
+    #[test]
+    fn test_parse_skill_metadata_missing_frontmatter() {
+        let dir = TempDir::new().unwrap();
+        let skill_md = dir.path().join("SKILL.md");
+        fs::write(&skill_md, "# No frontmatter here").unwrap();
+
+        let result = parse_skill_metadata(&skill_md);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_discover_skills_empty_dir() {
+        let dir = TempDir::new().unwrap();
+        let skills = discover_skills(dir.path()).unwrap();
+        assert!(skills.is_empty());
+    }
+
+    #[test]
+    fn test_discover_skills_with_skills() {
+        let dir = TempDir::new().unwrap();
+
+        // Create skill1
+        let skill1_dir = dir.path().join("skill1");
+        fs::create_dir(&skill1_dir).unwrap();
+        fs::write(
+            skill1_dir.join("SKILL.md"),
+            r#"---
+name: skill1
+description: First skill
+---
+# Skill 1
+"#,
+        )
+        .unwrap();
+
+        // Create skill2 with scripts
+        let skill2_dir = dir.path().join("skill2");
+        fs::create_dir(&skill2_dir).unwrap();
+        fs::write(
+            skill2_dir.join("SKILL.md"),
+            r#"---
+name: skill2
+description: Second skill
+---
+# Skill 2
+"#,
+        )
+        .unwrap();
+        fs::create_dir(skill2_dir.join("scripts")).unwrap();
+
+        // Create skill3 with references
+        let skill3_dir = dir.path().join("skill3");
+        fs::create_dir(&skill3_dir).unwrap();
+        fs::write(
+            skill3_dir.join("SKILL.md"),
+            r#"---
+name: skill3
+---
+# Skill 3
+"#,
+        )
+        .unwrap();
+        fs::create_dir(skill3_dir.join("references")).unwrap();
+
+        let skills = discover_skills(dir.path()).unwrap();
+        assert_eq!(skills.len(), 3);
+
+        // Skills should be sorted by name
+        assert_eq!(skills[0].name, "skill1");
+        assert_eq!(skills[0].description, "First skill");
+        assert!(!skills[0].has_scripts);
+        assert!(!skills[0].has_references);
+
+        assert_eq!(skills[1].name, "skill2");
+        assert!(skills[1].has_scripts);
+        assert!(!skills[1].has_references);
+
+        assert_eq!(skills[2].name, "skill3");
+        assert_eq!(skills[2].description, "No description");
+        assert!(!skills[2].has_scripts);
+        assert!(skills[2].has_references);
+    }
+
+    #[test]
+    fn test_discover_skills_nonexistent_dir() {
+        let path = PathBuf::from("/nonexistent/path");
+        let skills = discover_skills(&path).unwrap();
+        assert!(skills.is_empty());
+    }
 }

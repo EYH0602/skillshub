@@ -55,3 +55,48 @@ pub fn known_agent_names() -> String {
         .collect::<Vec<_>>()
         .join(", ")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_known_agents_not_empty() {
+        assert!(!KNOWN_AGENTS.is_empty());
+    }
+
+    #[test]
+    fn test_known_agents_have_skills_subdir() {
+        for (agent, subdir) in KNOWN_AGENTS {
+            assert!(!agent.is_empty());
+            assert!(!subdir.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_known_agent_names() {
+        let names = known_agent_names();
+        assert!(names.contains(".claude"));
+        assert!(names.contains(".codex"));
+        assert!(names.contains(".opencode"));
+    }
+
+    #[test]
+    fn test_known_agent_names_format() {
+        let names = known_agent_names();
+        // Should be comma-separated
+        assert!(names.contains(", "));
+    }
+
+    #[test]
+    fn test_discover_agents_returns_vec() {
+        // This test just verifies the function doesn't panic
+        // and returns a valid Vec (may be empty if no agents installed)
+        let agents = discover_agents();
+        // Each agent should have a valid path and subdir
+        for agent in agents {
+            assert!(!agent.skills_subdir.is_empty());
+            assert!(agent.path.exists());
+        }
+    }
+}

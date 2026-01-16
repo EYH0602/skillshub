@@ -56,3 +56,37 @@ pub fn display_path_with_tilde(path: &Path) -> String {
     }
     path.display().to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_skillshub_home() {
+        let home = get_skillshub_home().unwrap();
+        assert!(home.ends_with(".skillshub"));
+    }
+
+    #[test]
+    fn test_get_skills_install_dir() {
+        let dir = get_skills_install_dir().unwrap();
+        assert!(dir.ends_with("skills"));
+        assert!(dir.parent().unwrap().ends_with(".skillshub"));
+    }
+
+    #[test]
+    fn test_display_path_with_tilde_home_path() {
+        if let Some(home) = dirs::home_dir() {
+            let test_path = home.join("some/nested/path");
+            let display = display_path_with_tilde(&test_path);
+            assert_eq!(display, "~/some/nested/path");
+        }
+    }
+
+    #[test]
+    fn test_display_path_with_tilde_non_home_path() {
+        let test_path = PathBuf::from("/usr/local/bin");
+        let display = display_path_with_tilde(&test_path);
+        assert_eq!(display, "/usr/local/bin");
+    }
+}
