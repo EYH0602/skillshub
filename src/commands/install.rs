@@ -67,19 +67,10 @@ pub fn install_all() -> Result<()> {
 
 /// Install a specific skill
 pub fn install_skill(name: &str) -> Result<()> {
-    let source_dir = get_embedded_skills_dir()?;
     let install_dir = get_skills_install_dir()?;
+    let dest = install_dir.join(name);
 
-    let skills = discover_skills(&source_dir)?;
-    let skill = skills
-        .iter()
-        .find(|s| s.name == name)
-        .with_context(|| format!("Skill '{}' not found", name))?;
-
-    fs::create_dir_all(&install_dir)?;
-
-    let dest = install_dir.join(&skill.name);
-
+    // Check if already installed
     if dest.exists() {
         println!(
             "{} Skill '{}' is already installed at {}",
@@ -89,6 +80,24 @@ pub fn install_skill(name: &str) -> Result<()> {
         );
         return Ok(());
     }
+
+    // Try to find the skill in embedded/source directory
+    let source_dir = get_embedded_skills_dir().with_context(|| {
+        format!(
+            "Skill '{}' is not installed and no source directory found.\n\
+             Run 'skillshub install' from the skillshub repository directory,\n\
+             or use 'skillshub install-all' to install all available skills.",
+            name
+        )
+    })?;
+
+    let skills = discover_skills(&source_dir)?;
+    let skill = skills
+        .iter()
+        .find(|s| s.name == name)
+        .with_context(|| format!("Skill '{}' not found in {}", name, source_dir.display()))?;
+
+    fs::create_dir_all(&install_dir)?;
 
     copy_dir_recursive(&skill.path, &dest)?;
 

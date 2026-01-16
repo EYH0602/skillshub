@@ -12,20 +12,37 @@ pub fn get_skills_install_dir() -> Result<PathBuf> {
     Ok(get_skillshub_home()?.join("skills"))
 }
 
+/// Check if a directory looks like a valid skillshub skills directory
+/// (contains at least one subdirectory with a SKILL.md file)
+fn is_valid_skills_dir(path: &Path) -> bool {
+    if !path.is_dir() {
+        return false;
+    }
+    if let Ok(entries) = std::fs::read_dir(path) {
+        for entry in entries.flatten() {
+            let skill_md = entry.path().join("SKILL.md");
+            if skill_md.exists() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Get the embedded skills directory (relative to the binary or from cargo package)
 pub fn get_embedded_skills_dir() -> Result<PathBuf> {
     // First, try to find skills relative to the current executable
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(exe_dir) = exe_path.parent() {
-            // Check if we're running from the development directory
+            // Check if we're running from the development directory (target/debug or target/release)
             let dev_skills = exe_dir.join("../../skills");
-            if dev_skills.exists() {
+            if is_valid_skills_dir(&dev_skills) {
                 return Ok(dev_skills.canonicalize()?);
             }
 
             // Check for skills in the same directory as the binary
             let local_skills = exe_dir.join("skills");
-            if local_skills.exists() {
+            if is_valid_skills_dir(&local_skills) {
                 return Ok(local_skills);
             }
         }
@@ -33,18 +50,20 @@ pub fn get_embedded_skills_dir() -> Result<PathBuf> {
 
     // Try current working directory
     let cwd_skills = std::env::current_dir()?.join("skills");
-    if cwd_skills.exists() {
+    if is_valid_skills_dir(&cwd_skills) {
         return Ok(cwd_skills);
     }
 
     // Fallback: check if running from cargo run in the project directory
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let cargo_skills = PathBuf::from(manifest_dir).join("skills");
-    if cargo_skills.exists() {
+    if is_valid_skills_dir(&cargo_skills) {
         return Ok(cargo_skills);
     }
 
-    anyhow::bail!("Could not find skills directory. Make sure you're running from the skillshub directory or have installed skills.")
+    anyhow::bail!(
+        "Could not find skills source directory. Run this command from the skillshub repository."
+    )
 }
 
 /// Display a path with ~ substituted for home directory
