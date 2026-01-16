@@ -10,14 +10,14 @@ use tabled::{
 };
 use walkdir::WalkDir;
 
-/// Known coding agents that skillshub can manage
-const KNOWN_AGENTS: &[&str] = &[
-    ".claude",
-    ".codex",
-    ".opencode",
-    ".aider",
-    ".cursor",
-    ".continue",
+/// Agent configuration: (agent_dir, skills_subdir)
+const KNOWN_AGENTS: &[(&str, &str)] = &[
+    (".claude", "skills"),
+    (".codex", "skills"),
+    (".opencode", "skill"),
+    (".aider", "skills"),
+    (".cursor", "skills"),
+    (".continue", "skills"),
 ];
 
 /// Skillshub - A package manager for AI coding agent skills
@@ -392,6 +392,16 @@ fn truncate_string(s: &str, max_len: usize) -> String {
     }
 }
 
+/// Display a path with ~ substituted for home directory
+fn display_path_with_tilde(path: &PathBuf) -> String {
+    if let Some(home) = dirs::home_dir() {
+        if let Ok(stripped) = path.strip_prefix(&home) {
+            return format!("~/{}", stripped.display());
+        }
+    }
+    path.display().to_string()
+}
+
 /// List all available skills
 fn list_skills() -> Result<()> {
     let source_dir = get_embedded_skills_dir()?;
@@ -461,22 +471,23 @@ fn show_skill_info(name: &str) -> Result<()> {
     let source_dir = get_embedded_skills_dir()?;
     let install_dir = get_skills_install_dir()?;
 
-    // Check both source and installed locations
-    let skills = discover_skills(&source_dir)?;
+    // Check installed location first, then fall back to source
     let installed_skills = discover_skills(&install_dir)?;
+    let source_skills = discover_skills(&source_dir)?;
 
-    let skill = skills
-        .iter()
-        .chain(installed_skills.iter())
-        .find(|s| s.name == name)
+    let installed_skill = installed_skills.iter().find(|s| s.name == name);
+    let source_skill = source_skills.iter().find(|s| s.name == name);
+
+    // Prefer installed skill for display, but need source to know if it's available
+    let skill = installed_skill
+        .or(source_skill)
         .with_context(|| format!("Skill '{}' not found", name))?;
 
-    let is_installed = install_dir.join(&skill.name).exists();
+    let is_installed = installed_skill.is_some();
 
     println!("{}", skill.name.bold().underline());
     println!();
     println!("  {}: {}", "Description".cyan(), skill.description);
-    println!("  {}: {}", "Location".cyan(), skill.path.display());
     println!(
         "  {}: {}",
         "Status".cyan(),
@@ -486,6 +497,7 @@ fn show_skill_info(name: &str) -> Result<()> {
             "Not installed".yellow()
         }
     );
+    println!("  {}: {}", "Location".cyan(), skill.path.display());
 
     if skill.has_scripts {
         println!("  {}: Yes", "Has scripts".cyan());
@@ -515,19 +527,36 @@ fn show_skill_info(name: &str) -> Result<()> {
 }
 
 /// Discover coding agents on the system
-fn discover_agents() -> Vec<PathBuf> {
+/// Discovered agent info
+struct AgentInfo {
+    path: PathBuf,
+    skills_subdir: &'static str,
+}
+
+fn discover_agents() -> Vec<AgentInfo> {
     let mut agents = Vec::new();
 
     if let Some(home) = dirs::home_dir() {
-        for agent in KNOWN_AGENTS {
-            let agent_path = home.join(agent);
+        for (agent_dir, skills_subdir) in KNOWN_AGENTS {
+            let agent_path = home.join(agent_dir);
             if agent_path.exists() && agent_path.is_dir() {
-                agents.push(agent_path);
+                agents.push(AgentInfo {
+                    path: agent_path,
+                    skills_subdir,
+                });
             }
         }
     }
 
     agents
+}
+
+fn known_agent_names() -> String {
+    KNOWN_AGENTS
+        .iter()
+        .map(|(name, _)| *name)
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Link installed skills to all discovered coding agents
@@ -544,7 +573,7 @@ fn link_to_agents() -> Result<()> {
         println!(
             "{} No coding agents found. Looked for: {}",
             "Info:".cyan(),
-            KNOWN_AGENTS.join(", ")
+            known_agent_names()
         );
         return Ok(());
     }
@@ -555,18 +584,19 @@ fn link_to_agents() -> Result<()> {
         agents.len()
     );
 
-    for agent_path in &agents {
-        let agent_name = agent_path.file_name().unwrap().to_string_lossy();
-        let link_path = agent_path.join(".skills");
+    for agent in &agents {
+        let agent_name = agent.path.file_name().unwrap().to_string_lossy();
+        let link_path = agent.path.join(agent.skills_subdir);
 
         if link_path.exists() {
             if link_path.is_symlink() {
                 println!("  {} {} (link exists)", "○".yellow(), agent_name);
             } else {
                 println!(
-                    "  {} {} (.skills exists but is not a symlink)",
+                    "  {} {} ({} exists but is not a symlink)",
                     "!".red(),
-                    agent_name
+                    agent_name,
+                    agent.skills_subdir
                 );
             }
             continue;
@@ -594,19 +624,20 @@ fn show_agents() -> Result<()> {
     if agents.is_empty() {
         println!("No coding agents found.");
         println!();
-        println!("Looked for: {}", KNOWN_AGENTS.join(", "));
+        println!("Looked for: {}", known_agent_names());
         return Ok(());
     }
 
     let rows: Vec<AgentRow> = agents
         .iter()
-        .map(|agent_path| {
-            let agent_name = agent_path
+        .map(|agent| {
+            let agent_name = agent
+                .path
                 .file_name()
                 .unwrap()
                 .to_string_lossy()
                 .to_string();
-            let link_path = agent_path.join(".skills");
+            let link_path = agent.path.join(agent.skills_subdir);
 
             let status = if link_path.exists() {
                 if link_path.is_symlink() {
@@ -621,7 +652,7 @@ fn show_agents() -> Result<()> {
             AgentRow {
                 name: agent_name,
                 status,
-                path: agent_path.display().to_string(),
+                path: display_path_with_tilde(&link_path),
             }
         })
         .collect();
