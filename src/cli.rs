@@ -17,7 +17,7 @@ pub enum Commands {
 
     /// Install a skill (format: tap/skill[@commit])
     Install {
-        /// Full skill name (e.g., skillshub/skill-creator)
+        /// Full skill name (e.g., skillshub/code-reviewer)
         name: String,
     },
 
@@ -29,7 +29,7 @@ pub enum Commands {
 
     /// Uninstall a skill (format: tap/skill)
     Uninstall {
-        /// Full skill name (e.g., skillshub/skill-creator)
+        /// Full skill name (e.g., skillshub/code-reviewer)
         name: String,
     },
 
@@ -50,7 +50,7 @@ pub enum Commands {
 
     /// Show detailed information about a skill
     Info {
-        /// Full skill name (e.g., skillshub/skill-creator)
+        /// Full skill name (e.g., skillshub/code-reviewer)
         name: String,
     },
 

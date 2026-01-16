@@ -157,7 +157,7 @@ cargo run -- list        # Run directly
 ```bash
 cargo run -- tap list
 cargo run -- list
-cargo run -- install skillshub/skill-creator
+cargo run -- install skillshub/code-reviewer
 cargo run -- link
 cargo run -- agents
 ```

@@ -156,7 +156,7 @@ pub struct SkillId {
 }
 
 impl SkillId {
-    /// Parse a skill ID from string (e.g., "skillshub/skill-creator")
+    /// Parse a skill ID from string (e.g., "skillshub/code-reviewer")
     pub fn parse(s: &str) -> Option<Self> {
         let parts: Vec<&str> = s.splitn(2, '/').collect();
         if parts.len() == 2 && !parts[0].is_empty() && !parts[1].is_empty() {
@@ -194,9 +194,9 @@ mod tests {
 
     #[test]
     fn test_skill_id_parse_valid() {
-        let id = SkillId::parse("skillshub/skill-creator").unwrap();
+        let id = SkillId::parse("skillshub/code-reviewer").unwrap();
         assert_eq!(id.tap, "skillshub");
-        assert_eq!(id.skill, "skill-creator");
+        assert_eq!(id.skill, "code-reviewer");
     }
 
     #[test]
