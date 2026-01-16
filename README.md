@@ -1,7 +1,9 @@
-# Skillshub
+# [WIP] Skillshub
 
 Skillshub is a package manager for AI coding agent skills. 
 Install skills once and link them to every detected agent so all of your agents stay in sync.
+
+NOTE: work in progress and currently missing feature. VERY buggy.
 
 ## Why Skillshub
 
