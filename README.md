@@ -96,6 +96,7 @@ Taps are repositories that contain skills with a registry. The default `skillshu
 ```bash
 # List configured taps
 skillshub tap list
+# Skills column shows installed/available counts (e.g., 2/15 or 1/?)
 
 # Add a third-party tap (requires registry.json)
 skillshub tap add https://github.com/user/my-skills-tap

@@ -132,16 +132,15 @@ pub fn list_taps() -> Result<()> {
     let mut rows: Vec<TapRow> = Vec::new();
 
     for (name, tap) in &db.taps {
-        let skills_count = if tap.is_default {
+        let installed_count = count_installed_skills(&db, name);
+        let available_count = if tap.is_default {
             // For default tap, count local skills
-            count_local_skills().map_or("-".to_string(), |c| c.to_string())
+            count_local_skills().ok()
         } else {
             // For remote taps, try to get from registry
-            match get_tap_skill_count(tap) {
-                Ok(count) => count.to_string(),
-                Err(_) => "?".to_string(),
-            }
+            get_tap_skill_count(tap).ok()
         };
+        let skills_count = format_skills_count(installed_count, available_count);
 
         rows.push(TapRow {
             name: name.clone(),
@@ -251,6 +250,19 @@ fn count_local_skills() -> Result<usize> {
     Ok(skills.len())
 }
 
+/// Count installed skills for a given tap
+fn count_installed_skills(db: &Database, tap_name: &str) -> usize {
+    db::get_skills_from_tap(db, tap_name).len()
+}
+
+/// Format installed/available skill counts for display
+fn format_skills_count(installed: usize, available: Option<usize>) -> String {
+    let available_display = available
+        .map(|count| count.to_string())
+        .unwrap_or_else(|| "?".to_string());
+    format!("{}/{}", installed, available_display)
+}
+
 /// Truncate URL for display
 fn truncate_url(url: &str, max_len: usize) -> String {
     if url.len() <= max_len {
@@ -307,6 +319,8 @@ pub fn generate_local_registry() -> Result<TapRegistry> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::registry::models::InstalledSkill;
+    use chrono::Utc;
 
     #[test]
     fn test_truncate_url_short() {
@@ -319,5 +333,60 @@ mod tests {
         let truncated = truncate_url(long_url, 30);
         assert!(truncated.len() <= 30);
         assert!(truncated.ends_with("..."));
+    }
+
+    #[test]
+    fn test_format_skills_count_known() {
+        assert_eq!(format_skills_count(2, Some(10)), "2/10");
+    }
+
+    #[test]
+    fn test_format_skills_count_unknown() {
+        assert_eq!(format_skills_count(1, None), "1/?");
+    }
+
+    #[test]
+    fn test_count_installed_skills() {
+        let mut db = Database::default();
+        db.installed.insert(
+            "tap1/skill1".to_string(),
+            InstalledSkill {
+                tap: "tap1".to_string(),
+                skill: "skill1".to_string(),
+                commit: None,
+                installed_at: Utc::now(),
+                local: false,
+                source_url: None,
+                source_path: None,
+            },
+        );
+        db.installed.insert(
+            "tap1/skill2".to_string(),
+            InstalledSkill {
+                tap: "tap1".to_string(),
+                skill: "skill2".to_string(),
+                commit: None,
+                installed_at: Utc::now(),
+                local: false,
+                source_url: None,
+                source_path: None,
+            },
+        );
+        db.installed.insert(
+            "tap2/skill1".to_string(),
+            InstalledSkill {
+                tap: "tap2".to_string(),
+                skill: "skill1".to_string(),
+                commit: None,
+                installed_at: Utc::now(),
+                local: false,
+                source_url: None,
+                source_path: None,
+            },
+        );
+
+        assert_eq!(count_installed_skills(&db, "tap1"), 2);
+        assert_eq!(count_installed_skills(&db, "tap2"), 1);
+        assert_eq!(count_installed_skills(&db, "missing"), 0);
     }
 }
