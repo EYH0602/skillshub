@@ -72,11 +72,7 @@ pub fn install_skill(full_name: &str) -> Result<()> {
         )
     })?;
 
-    println!(
-        "{} Installing '{}'",
-        "=>".green().bold(),
-        skill_id.full_name()
-    );
+    println!("{} Installing '{}'", "=>".green().bold(), skill_id.full_name());
 
     let dest = install_dir.join(&skill_id.tap).join(&skill_id.skill);
     std::fs::create_dir_all(&dest)?;
@@ -86,12 +82,7 @@ pub fn install_skill(full_name: &str) -> Result<()> {
         install_from_local(&skill_id.skill, &dest)?
     } else {
         // Install from remote
-        install_from_remote(
-            &tap.url,
-            &skill_entry.path,
-            &dest,
-            requested_commit.as_deref(),
-        )?
+        install_from_remote(&tap.url, &skill_entry.path, &dest, requested_commit.as_deref())?
     };
 
     // Record in database
@@ -101,16 +92,8 @@ pub fn install_skill(full_name: &str) -> Result<()> {
         commit,
         installed_at: Utc::now(),
         local: is_local,
-        source_url: if is_local {
-            None
-        } else {
-            Some(tap.url.clone())
-        },
-        source_path: if is_local {
-            None
-        } else {
-            Some(skill_entry.path.clone())
-        },
+        source_url: if is_local { None } else { Some(tap.url.clone()) },
+        source_path: if is_local { None } else { Some(skill_entry.path.clone()) },
     };
 
     db::add_installed_skill(&mut db, &skill_id.full_name(), installed);
@@ -133,9 +116,10 @@ pub fn add_skill_from_url(url: &str) -> Result<()> {
     let github_url = parse_github_url(url)?;
 
     // Must have a path to the skill folder
-    let skill_path = github_url.path.as_ref().with_context(|| {
-        "URL must include path to skill folder (e.g., /tree/main/skills/my-skill)"
-    })?;
+    let skill_path = github_url
+        .path
+        .as_ref()
+        .with_context(|| "URL must include path to skill folder (e.g., /tree/main/skills/my-skill)")?;
 
     // Get skill name from path
     let skill_name = github_url
@@ -165,12 +149,7 @@ pub fn add_skill_from_url(url: &str) -> Result<()> {
         return Ok(());
     }
 
-    println!(
-        "{} Adding '{}' from {}",
-        "=>".green().bold(),
-        full_name,
-        url
-    );
+    println!("{} Adding '{}' from {}", "=>".green().bold(), full_name, url);
 
     // Determine commit to use
     let commit = if github_url.is_commit_sha() {
@@ -187,10 +166,7 @@ pub fn add_skill_from_url(url: &str) -> Result<()> {
 
     // Add tap if it doesn't exist
     if db::get_tap(&db, &tap_name).is_none() {
-        let tap_url = format!(
-            "https://github.com/{}/{}",
-            github_url.owner, github_url.repo
-        );
+        let tap_url = format!("https://github.com/{}/{}", github_url.owner, github_url.repo);
         let tap_info = super::models::TapInfo {
             url: tap_url,
             skills_path: "skills".to_string(),
@@ -438,11 +414,7 @@ pub fn update_skill(full_name: Option<&str>) -> Result<()> {
 
     db::save_db(&db)?;
 
-    println!(
-        "\n{} {} skill(s) updated",
-        "Done!".green().bold(),
-        updated_count
-    );
+    println!("\n{} {} skill(s) updated", "Done!".green().bold(), updated_count);
 
     Ok(())
 }
@@ -455,7 +427,7 @@ pub fn list_skills() -> Result<()> {
     let mut seen_skills: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     // Collect skills from all taps (available skills)
-    for (tap_name, _tap) in &db.taps {
+    for tap_name in db.taps.keys() {
         let registry = match get_tap_registry(&db, tap_name) {
             Ok(r) => r,
             Err(_) => continue,
@@ -496,10 +468,7 @@ pub fn list_skills() -> Result<()> {
 
         // Get description from installed skill's SKILL.md if available
         let install_dir = get_skills_install_dir()?;
-        let skill_md_path = install_dir
-            .join(&installed.tap)
-            .join(&installed.skill)
-            .join("SKILL.md");
+        let skill_md_path = install_dir.join(&installed.tap).join(&installed.skill).join("SKILL.md");
 
         let description = if skill_md_path.exists() {
             crate::skill::parse_skill_metadata(&skill_md_path)
@@ -560,7 +529,7 @@ pub fn search_skills(query: &str) -> Result<()> {
     let query_lower = query.to_lowercase();
     let mut results: Vec<SkillListRow> = Vec::new();
 
-    for (tap_name, _tap) in &db.taps {
+    for tap_name in db.taps.keys() {
         let registry = match get_tap_registry(&db, tap_name) {
             Ok(r) => r,
             Err(_) => continue,
@@ -578,10 +547,7 @@ pub fn search_skills(query: &str) -> Result<()> {
                     status: if installed.is_some() { "✓" } else { "○" },
                     name: skill_name.clone(),
                     tap: tap_name.clone(),
-                    description: truncate_string(
-                        entry.description.as_deref().unwrap_or("No description"),
-                        50,
-                    ),
+                    description: truncate_string(entry.description.as_deref().unwrap_or("No description"), 50),
                     commit: installed
                         .and_then(|i| i.commit.clone())
                         .unwrap_or_else(|| "-".to_string()),
@@ -764,11 +730,7 @@ pub fn install_all() -> Result<()> {
         }
     }
 
-    println!(
-        "\n{} Installed {} skills",
-        "Done!".green().bold(),
-        installed_count
-    );
+    println!("\n{} Installed {} skills", "Done!".green().bold(), installed_count);
 
     Ok(())
 }

@@ -53,10 +53,7 @@ mod tests {
         copy_dir_recursive(src_dir.path(), &dst_path).unwrap();
 
         assert!(dst_path.join("file1.txt").exists());
-        assert_eq!(
-            fs::read_to_string(dst_path.join("file1.txt")).unwrap(),
-            "content1"
-        );
+        assert_eq!(fs::read_to_string(dst_path.join("file1.txt")).unwrap(), "content1");
         assert!(dst_path.join("subdir/file2.txt").exists());
         assert_eq!(
             fs::read_to_string(dst_path.join("subdir/file2.txt")).unwrap(),

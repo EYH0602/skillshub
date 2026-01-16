@@ -62,9 +62,7 @@ pub fn parse_github_url(url: &str) -> Result<GitHubUrl> {
 pub fn fetch_tap_registry(github_url: &GitHubUrl, registry_path: &str) -> Result<TapRegistry> {
     let raw_url = github_url.raw_url(registry_path);
 
-    let client = reqwest::blocking::Client::builder()
-        .user_agent(USER_AGENT)
-        .build()?;
+    let client = reqwest::blocking::Client::builder().user_agent(USER_AGENT).build()?;
 
     let response = client
         .get(&raw_url)
@@ -72,16 +70,10 @@ pub fn fetch_tap_registry(github_url: &GitHubUrl, registry_path: &str) -> Result
         .with_context(|| format!("Failed to fetch registry from {}", raw_url))?;
 
     if !response.status().is_success() {
-        anyhow::bail!(
-            "Failed to fetch registry: HTTP {} from {}",
-            response.status(),
-            raw_url
-        );
+        anyhow::bail!("Failed to fetch registry: HTTP {} from {}", response.status(), raw_url);
     }
 
-    let registry: TapRegistry = response
-        .json()
-        .with_context(|| "Failed to parse registry.json")?;
+    let registry: TapRegistry = response.json().with_context(|| "Failed to parse registry.json")?;
 
     Ok(registry)
 }
@@ -120,11 +112,7 @@ fn build_directory_registry(
 }
 
 /// Fetch a tap registry by listing a skills directory
-pub fn fetch_directory_registry(
-    github_url: &GitHubUrl,
-    tap_name: &str,
-    skills_path: &str,
-) -> Result<TapRegistry> {
+pub fn fetch_directory_registry(github_url: &GitHubUrl, tap_name: &str, skills_path: &str) -> Result<TapRegistry> {
     let api_url = format!(
         "{}/contents/{}?ref={}",
         github_url.api_url(),
@@ -132,9 +120,7 @@ pub fn fetch_directory_registry(
         github_url.branch
     );
 
-    let client = reqwest::blocking::Client::builder()
-        .user_agent(USER_AGENT)
-        .build()?;
+    let client = reqwest::blocking::Client::builder().user_agent(USER_AGENT).build()?;
 
     let response = client
         .get(&api_url)
@@ -153,25 +139,16 @@ pub fn fetch_directory_registry(
         .json()
         .with_context(|| "Failed to parse skills directory listing")?;
 
-    let description = Some(format!(
-        "Default skills from {}/{}",
-        github_url.owner, github_url.repo
-    ));
+    let description = Some(format!("Default skills from {}/{}", github_url.owner, github_url.repo));
 
     Ok(build_directory_registry(tap_name, description, &entries))
 }
 
 /// Get the latest commit SHA for a path in a repository
 pub fn get_latest_commit(github_url: &GitHubUrl, path: Option<&str>) -> Result<String> {
-    let client = reqwest::blocking::Client::builder()
-        .user_agent(USER_AGENT)
-        .build()?;
+    let client = reqwest::blocking::Client::builder().user_agent(USER_AGENT).build()?;
 
-    let mut url = format!(
-        "{}/commits?sha={}&per_page=1",
-        github_url.api_url(),
-        github_url.branch
-    );
+    let mut url = format!("{}/commits?sha={}&per_page=1", github_url.api_url(), github_url.branch);
 
     if let Some(p) = path {
         url.push_str(&format!("&path={}", p));
@@ -198,17 +175,10 @@ pub fn get_latest_commit(github_url: &GitHubUrl, path: Option<&str>) -> Result<S
 /// Download and extract a skill from a GitHub repository
 ///
 /// Downloads the tarball, extracts the specific skill folder, and copies to destination.
-pub fn download_skill(
-    github_url: &GitHubUrl,
-    skill_path: &str,
-    dest: &Path,
-    commit: Option<&str>,
-) -> Result<String> {
+pub fn download_skill(github_url: &GitHubUrl, skill_path: &str, dest: &Path, commit: Option<&str>) -> Result<String> {
     let git_ref = commit.unwrap_or(&github_url.branch);
 
-    let client = reqwest::blocking::Client::builder()
-        .user_agent(USER_AGENT)
-        .build()?;
+    let client = reqwest::blocking::Client::builder().user_agent(USER_AGENT).build()?;
 
     // Download tarball
     let tarball_url = github_url.tarball_url(git_ref);
@@ -316,10 +286,7 @@ mod tests {
         assert_eq!(registry.name, "anthropics");
         assert!(registry.skills.contains_key("skill-one"));
         assert!(!registry.skills.contains_key("README.md"));
-        assert_eq!(
-            registry.skills.get("skill-one").unwrap().path,
-            "skills/skill-one"
-        );
+        assert_eq!(registry.skills.get("skill-one").unwrap().path, "skills/skill-one");
     }
 
     #[test]
@@ -342,8 +309,7 @@ mod tests {
 
     #[test]
     fn test_parse_github_url_with_path() {
-        let url =
-            parse_github_url("https://github.com/owner/repo/tree/main/path/to/folder").unwrap();
+        let url = parse_github_url("https://github.com/owner/repo/tree/main/path/to/folder").unwrap();
         assert_eq!(url.owner, "owner");
         assert_eq!(url.repo, "repo");
         assert_eq!(url.branch, "main");

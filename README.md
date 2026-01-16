@@ -190,3 +190,17 @@ If you have an existing installation from before the tap system was introduced, 
 ```bash
 skillshub migrate
 ```
+
+## Development
+
+```bash
+# Install pre-commit (one option)
+python -m pip install --user pre-commit
+
+# Install git hooks (requires `pre-commit`)
+pre-commit install --install-hooks
+pre-commit install --hook-type pre-push --install-hooks
+
+# Run all checks locally
+pre-commit run --all-files
+```
