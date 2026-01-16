@@ -3,6 +3,7 @@ name: paper-polish
 description: This skills helps agents to review and polish research papers written in LaTeX, focusing on writing clarity, grammar, LaTeX best practices, and document structure.
 metadata:
   short-description: fixing writing errors in academic papers
+  
 ---
 # Polishing and reviewing research papers in LaTeX
 

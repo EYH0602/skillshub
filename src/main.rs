@@ -4,6 +4,10 @@ use colored::Colorize;
 use serde::Deserialize;
 use std::fs;
 use std::path::PathBuf;
+use tabled::{
+    settings::{Padding, Style},
+    Table, Tabled,
+};
 use walkdir::WalkDir;
 
 /// Known coding agents that skillshub can manage
@@ -111,13 +115,37 @@ impl<'de> Deserialize<'de> for AllowedTools {
 }
 
 /// Represents a discovered skill
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Skill {
     name: String,
     description: String,
     path: PathBuf,
     has_scripts: bool,
     has_references: bool,
+}
+
+/// Table row for displaying skills
+#[derive(Tabled)]
+struct SkillRow {
+    #[tabled(rename = " ")]
+    status: &'static str,
+    #[tabled(rename = "Name")]
+    name: String,
+    #[tabled(rename = "Description")]
+    description: String,
+    #[tabled(rename = "Extras")]
+    extras: String,
+}
+
+/// Table row for displaying agents
+#[derive(Tabled)]
+struct AgentRow {
+    #[tabled(rename = "Agent")]
+    name: String,
+    #[tabled(rename = "Status")]
+    status: &'static str,
+    #[tabled(rename = "Path")]
+    path: String,
 }
 
 fn main() -> Result<()> {
@@ -355,6 +383,15 @@ fn install_skill(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Truncate a string to max length with ellipsis
+fn truncate_string(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        s.to_string()
+    } else {
+        format!("{}...", &s[..max_len.saturating_sub(3)])
+    }
+}
+
 /// List all available skills
 fn list_skills() -> Result<()> {
     let source_dir = get_embedded_skills_dir()?;
@@ -366,40 +403,52 @@ fn list_skills() -> Result<()> {
     let installed_names: std::collections::HashSet<_> =
         installed_skills.iter().map(|s| &s.name).collect();
 
-    println!("{}", "Available Skills".bold().underline());
-    println!();
-
     if available_skills.is_empty() {
-        println!("  No skills found.");
+        println!("No skills found.");
         return Ok(());
     }
 
-    for skill in &available_skills {
-        let status = if installed_names.contains(&skill.name) {
-            "✓".green()
-        } else {
-            "○".dimmed()
-        };
+    let rows: Vec<SkillRow> = available_skills
+        .iter()
+        .map(|skill| {
+            let status = if installed_names.contains(&skill.name) {
+                "✓"
+            } else {
+                "○"
+            };
 
-        let extras = format!(
-            "{}{}",
-            if skill.has_scripts { " [scripts]" } else { "" },
-            if skill.has_references { " [refs]" } else { "" }
-        )
-        .dimmed();
+            let extras = format!(
+                "{}{}",
+                if skill.has_scripts { "scripts" } else { "" },
+                if skill.has_references {
+                    if skill.has_scripts {
+                        ", refs"
+                    } else {
+                        "refs"
+                    }
+                } else {
+                    ""
+                }
+            );
 
-        println!(
-            "  {} {:<25} {}{}",
-            status,
-            skill.name.bold(),
-            skill.description.dimmed(),
-            extras
-        );
-    }
+            SkillRow {
+                status,
+                name: skill.name.clone(),
+                description: truncate_string(&skill.description, 60),
+                extras,
+            }
+        })
+        .collect();
 
+    let table = Table::new(rows)
+        .with(Style::rounded())
+        .with(Padding::new(1, 1, 0, 1))
+        .to_string();
+
+    println!("{}", table);
     println!();
     println!(
-        "  {} installed, {} available",
+        "{} installed, {} available",
         installed_skills.len().to_string().green(),
         available_skills.len()
     );
@@ -540,38 +589,52 @@ fn link_to_agents() -> Result<()> {
 
 /// Show discovered coding agents
 fn show_agents() -> Result<()> {
-    println!("{}", "Coding Agents".bold().underline());
-    println!();
-
     let agents = discover_agents();
 
     if agents.is_empty() {
-        println!("  No coding agents found.");
+        println!("No coding agents found.");
         println!();
-        println!("  Looked for: {}", KNOWN_AGENTS.join(", "));
+        println!("Looked for: {}", KNOWN_AGENTS.join(", "));
         return Ok(());
     }
 
-    for agent_path in &agents {
-        let agent_name = agent_path.file_name().unwrap().to_string_lossy();
-        let link_path = agent_path.join(".skills");
+    let rows: Vec<AgentRow> = agents
+        .iter()
+        .map(|agent_path| {
+            let agent_name = agent_path
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .to_string();
+            let link_path = agent_path.join(".skills");
 
-        let status = if link_path.exists() {
-            if link_path.is_symlink() {
-                "linked".green()
+            let status = if link_path.exists() {
+                if link_path.is_symlink() {
+                    "✓ linked"
+                } else {
+                    "! not symlink"
+                }
             } else {
-                "has .skills (not symlink)".yellow()
+                "○ not linked"
+            };
+
+            AgentRow {
+                name: agent_name,
+                status,
+                path: agent_path.display().to_string(),
             }
-        } else {
-            "not linked".dimmed()
-        };
+        })
+        .collect();
 
-        println!("  {} {:<15} [{}]", "●".cyan(), agent_name.bold(), status);
-    }
+    let table = Table::new(rows)
+        .with(Style::rounded())
+        .with(Padding::new(1, 1, 0, 1))
+        .to_string();
 
+    println!("{}", table);
     println!();
     println!(
-        "  {} Run {} to link skills to agents",
+        "{} Run {} to link skills to agents",
         "Tip:".cyan(),
         "skillshub link".bold()
     );
