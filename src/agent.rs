@@ -61,11 +61,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_known_agents_not_empty() {
-        assert!(!KNOWN_AGENTS.is_empty());
-    }
-
-    #[test]
     fn test_known_agents_have_skills_subdir() {
         for (agent, subdir) in KNOWN_AGENTS {
             assert!(!agent.is_empty());

@@ -20,10 +20,8 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // Auto-migrate old installations on first run (except for migrate command itself)
-    if !matches!(cli.command, Commands::Migrate) {
-        if needs_migration()? {
-            migrate_old_installations()?;
-        }
+    if !matches!(cli.command, Commands::Migrate) && needs_migration()? {
+        migrate_old_installations()?;
     }
 
     match cli.command {

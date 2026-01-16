@@ -164,7 +164,7 @@ fn collect_installed_skills(skills_dir: &Path) -> Result<Vec<Skill>> {
         unique.push(skill);
     }
 
-    unique.sort_by(|a, b| skill_link_name(a).cmp(&skill_link_name(b)));
+    unique.sort_by_key(skill_link_name);
 
     Ok(unique)
 }

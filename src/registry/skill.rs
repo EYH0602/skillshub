@@ -427,7 +427,7 @@ pub fn list_skills() -> Result<()> {
     let mut seen_skills: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     // Collect skills from all taps (available skills)
-    for (tap_name, _tap) in &db.taps {
+    for tap_name in db.taps.keys() {
         let registry = match get_tap_registry(&db, tap_name) {
             Ok(r) => r,
             Err(_) => continue,
@@ -529,7 +529,7 @@ pub fn search_skills(query: &str) -> Result<()> {
     let query_lower = query.to_lowercase();
     let mut results: Vec<SkillListRow> = Vec::new();
 
-    for (tap_name, _tap) in &db.taps {
+    for tap_name in db.taps.keys() {
         let registry = match get_tap_registry(&db, tap_name) {
             Ok(r) => r,
             Err(_) => continue,

@@ -117,7 +117,7 @@ impl GitHubUrl {
     pub fn skill_name(&self) -> Option<String> {
         self.path
             .as_ref()
-            .and_then(|p| p.split('/').last())
+            .and_then(|p| p.split('/').next_back())
             .map(|s| s.to_string())
     }
 
