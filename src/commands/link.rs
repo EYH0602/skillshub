@@ -18,10 +18,7 @@ pub fn link_to_agents() -> Result<()> {
 
     let skills = collect_installed_skills(&skills_dir)?;
     if skills.is_empty() {
-        println!(
-            "{} No skills found. Install skills before linking.",
-            "Info:".cyan()
-        );
+        println!("{} No skills found. Install skills before linking.", "Info:".cyan());
         return Ok(());
     }
 
@@ -42,9 +39,7 @@ pub fn link_to_agents() -> Result<()> {
         agents.len()
     );
 
-    let skills_dir_canonical = skills_dir
-        .canonicalize()
-        .unwrap_or_else(|_| skills_dir.clone());
+    let skills_dir_canonical = skills_dir.canonicalize().unwrap_or_else(|_| skills_dir.clone());
 
     for agent in &agents {
         let agent_name = agent.path.file_name().unwrap().to_string_lossy();
@@ -184,10 +179,7 @@ mod tests {
         fs::create_dir_all(path).unwrap();
         fs::write(
             path.join("SKILL.md"),
-            format!(
-                "---\nname: {}\ndescription: Test skill\n---\n# {}\n",
-                name, name
-            ),
+            format!("---\nname: {}\ndescription: Test skill\n---\n# {}\n", name, name),
         )
         .unwrap();
     }
@@ -198,10 +190,7 @@ mod tests {
         let skills_dir = temp.path();
 
         write_skill(&skills_dir.join("legacy-skill"), "legacy-skill");
-        write_skill(
-            &skills_dir.join("tap-a").join("nested-skill"),
-            "nested-skill",
-        );
+        write_skill(&skills_dir.join("tap-a").join("nested-skill"), "nested-skill");
 
         let skills = collect_installed_skills(skills_dir).unwrap();
         let names: Vec<String> = skills.iter().map(skill_link_name).collect();

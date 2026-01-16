@@ -61,9 +61,7 @@ pub fn get_embedded_skills_dir() -> Result<PathBuf> {
         return Ok(cargo_skills);
     }
 
-    anyhow::bail!(
-        "Could not find skills source directory. Run this command from the skillshub repository."
-    )
+    anyhow::bail!("Could not find skills source directory. Run this command from the skillshub repository.")
 }
 
 /// Display a path with ~ substituted for home directory

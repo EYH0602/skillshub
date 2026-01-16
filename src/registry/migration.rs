@@ -60,11 +60,7 @@ pub fn migrate_old_installations() -> Result<()> {
 
         // Move the skill to the new location
         if new_path.exists() {
-            println!(
-                "  {} {} (already exists at new location)",
-                "○".yellow(),
-                skill.name
-            );
+            println!("  {} {} (already exists at new location)", "○".yellow(), skill.name);
             // Remove old location
             fs::remove_dir_all(old_path)?;
         } else {

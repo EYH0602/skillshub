@@ -31,11 +31,11 @@ pub fn load_db() -> Result<Database> {
         return Ok(Database::default());
     }
 
-    let content = fs::read_to_string(&db_path)
-        .with_context(|| format!("Failed to read database at {}", db_path.display()))?;
+    let content =
+        fs::read_to_string(&db_path).with_context(|| format!("Failed to read database at {}", db_path.display()))?;
 
-    let db: Database = serde_json::from_str(&content)
-        .with_context(|| format!("Failed to parse database at {}", db_path.display()))?;
+    let db: Database =
+        serde_json::from_str(&content).with_context(|| format!("Failed to parse database at {}", db_path.display()))?;
 
     Ok(db)
 }
@@ -50,8 +50,7 @@ pub fn save_db(db: &Database) -> Result<()> {
     }
 
     let content = serde_json::to_string_pretty(db)?;
-    fs::write(&db_path, content)
-        .with_context(|| format!("Failed to write database to {}", db_path.display()))?;
+    fs::write(&db_path, content).with_context(|| format!("Failed to write database to {}", db_path.display()))?;
 
     Ok(())
 }
@@ -141,14 +140,8 @@ pub fn remove_tap(db: &mut Database, name: &str) -> Option<TapInfo> {
 }
 
 /// Get all skills installed from a specific tap
-pub fn get_skills_from_tap<'a>(
-    db: &'a Database,
-    tap_name: &str,
-) -> Vec<(&'a String, &'a InstalledSkill)> {
-    db.installed
-        .iter()
-        .filter(|(_, skill)| skill.tap == tap_name)
-        .collect()
+pub fn get_skills_from_tap<'a>(db: &'a Database, tap_name: &str) -> Vec<(&'a String, &'a InstalledSkill)> {
+    db.installed.iter().filter(|(_, skill)| skill.tap == tap_name).collect()
 }
 
 #[cfg(test)]

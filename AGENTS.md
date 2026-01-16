@@ -132,6 +132,7 @@ skillshub migrate                           # Migrate old-style installations
 - Always update `README.md` and `CLAUDE.md` when you introduce new features or libraries.
 - Always write unit tests for integration testing and functional testing of new features.
 - Always test your code after your implementation.
+- Use `pre-commit install --install-hooks` (and optionally `--hook-type pre-push`) to enable local git hooks.
 
 #### Scratch Space
 

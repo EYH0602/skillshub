@@ -39,9 +39,7 @@ impl<'de> Deserialize<'de> for AllowedTools {
             where
                 E: de::Error,
             {
-                Ok(AllowedTools(
-                    value.split(',').map(|s| s.trim().to_string()).collect(),
-                ))
+                Ok(AllowedTools(value.split(',').map(|s| s.trim().to_string()).collect()))
             }
 
             fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
@@ -74,8 +72,8 @@ pub struct Skill {
 
 /// Parse skill metadata from SKILL.md file
 pub fn parse_skill_metadata(skill_md_path: &Path) -> Result<SkillMetadata> {
-    let content = fs::read_to_string(skill_md_path)
-        .with_context(|| format!("Failed to read {}", skill_md_path.display()))?;
+    let content =
+        fs::read_to_string(skill_md_path).with_context(|| format!("Failed to read {}", skill_md_path.display()))?;
 
     // Extract YAML frontmatter between --- markers
     let parts: Vec<&str> = content.splitn(3, "---").collect();
@@ -87,12 +85,8 @@ pub fn parse_skill_metadata(skill_md_path: &Path) -> Result<SkillMetadata> {
     }
 
     let yaml_content = parts[1].trim();
-    let metadata: SkillMetadata = serde_yaml::from_str(yaml_content).with_context(|| {
-        format!(
-            "Failed to parse YAML frontmatter in {}",
-            skill_md_path.display()
-        )
-    })?;
+    let metadata: SkillMetadata = serde_yaml::from_str(yaml_content)
+        .with_context(|| format!("Failed to parse YAML frontmatter in {}", skill_md_path.display()))?;
 
     Ok(metadata)
 }
@@ -121,14 +115,11 @@ pub fn discover_skills(skills_dir: &Path) -> Result<Vec<Skill>> {
         match parse_skill_metadata(&skill_md) {
             Ok(metadata) => {
                 let has_scripts = path.join("scripts").exists();
-                let has_references =
-                    path.join("references").exists() || path.join("resources").exists();
+                let has_references = path.join("references").exists() || path.join("resources").exists();
 
                 skills.push(Skill {
                     name: metadata.name,
-                    description: metadata
-                        .description
-                        .unwrap_or_else(|| "No description".to_string()),
+                    description: metadata.description.unwrap_or_else(|| "No description".to_string()),
                     path,
                     has_scripts,
                     has_references,

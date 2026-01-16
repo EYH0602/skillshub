@@ -42,12 +42,7 @@ pub fn add_tap(url: &str) -> Result<()> {
         );
     }
 
-    println!(
-        "{} Adding tap '{}' from {}",
-        "=>".green().bold(),
-        tap_name,
-        url
-    );
+    println!("{} Adding tap '{}' from {}", "=>".green().bold(), tap_name, url);
 
     // Verify the tap has a valid registry.json
     println!("  {} Fetching registry...", "○".yellow());
@@ -80,11 +75,7 @@ pub fn add_tap(url: &str) -> Result<()> {
             println!("    {} {}/{} - {}", "•".cyan(), tap_name, name, desc);
         }
         if registry.skills.len() > 10 {
-            println!(
-                "    {} ... and {} more",
-                "•".cyan(),
-                registry.skills.len() - 10
-            );
+            println!("    {} ... and {} more", "•".cyan(), registry.skills.len() - 10);
         }
     }
 
@@ -140,9 +131,7 @@ pub fn list_taps() -> Result<()> {
         let available_count = if tap.is_bundled {
             count_local_skills().ok()
         } else {
-            get_tap_registry(&db, name)
-                .ok()
-                .map(|registry| registry.skills.len())
+            get_tap_registry(&db, name).ok().map(|registry| registry.skills.len())
         };
         let skills_count = format_skills_count(installed_count, available_count);
 
@@ -224,11 +213,7 @@ fn update_single_tap(name: &str, tap: &TapInfo) -> Result<usize> {
 
     // Verify name matches
     if registry.name != name {
-        anyhow::bail!(
-            "Registry name mismatch: expected '{}', got '{}'",
-            name,
-            registry.name
-        );
+        anyhow::bail!("Registry name mismatch: expected '{}', got '{}'", name, registry.name);
     }
 
     Ok(registry.skills.len())
