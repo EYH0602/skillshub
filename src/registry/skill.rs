@@ -12,7 +12,9 @@ use super::models::{InstalledSkill, SkillId};
 use super::tap::get_tap_registry;
 use crate::paths::{get_embedded_skills_dir, get_skills_install_dir};
 use crate::skill::discover_skills;
-use crate::util::copy_dir_recursive;
+use crate::util::{copy_dir_recursive, truncate_string};
+
+const DESCRIPTION_MAX_LEN: usize = 50;
 
 /// Table row for displaying skills
 #[derive(Tabled)]
@@ -478,7 +480,7 @@ pub fn list_skills() -> Result<()> {
                 tap: tap_name.clone(),
                 description: truncate_string(
                     entry.description.as_deref().unwrap_or("No description"),
-                    50,
+                    DESCRIPTION_MAX_LEN,
                 ),
                 commit,
             });
@@ -511,7 +513,7 @@ pub fn list_skills() -> Result<()> {
             status: "✓",
             name: installed.skill.clone(),
             tap: installed.tap.clone(),
-            description: truncate_string(&description, 50),
+            description: truncate_string(&description, DESCRIPTION_MAX_LEN),
             commit: installed.commit.clone().unwrap_or_else(|| "-".to_string()),
         });
     }
@@ -642,7 +644,7 @@ pub fn show_skill_info(full_name: &str) -> Result<()> {
             .and_then(|skills| {
                 skills
                     .into_iter()
-                    .find(|s| s.name == skill_id.skill || skill_path.join("SKILL.md").exists())
+                    .find(|s| s.name == skill_id.skill || s.path == skill_path)
                     .map(|s| s.description)
             })
     } else {
@@ -747,24 +749,4 @@ pub fn install_all() -> Result<()> {
     );
 
     Ok(())
-}
-
-/// Truncate a string for display
-fn truncate_string(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
-        s.to_string()
-    } else {
-        format!("{}...", &s[..max_len.saturating_sub(3)])
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_truncate_string() {
-        assert_eq!(truncate_string("short", 10), "short");
-        assert_eq!(truncate_string("hello world", 8), "hello...");
-    }
 }

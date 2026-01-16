@@ -9,6 +9,9 @@ use tabled::{
 use super::db::{self, DEFAULT_TAP_NAME};
 use super::github::{fetch_tap_registry, parse_github_url};
 use super::models::{Database, TapInfo, TapRegistry};
+use crate::util::truncate_string;
+
+const TAP_URL_MAX_LEN: usize = 50;
 
 /// Table row for displaying taps
 #[derive(Tabled)]
@@ -144,7 +147,7 @@ pub fn list_taps() -> Result<()> {
 
         rows.push(TapRow {
             name: name.clone(),
-            url: truncate_url(&tap.url, 50),
+            url: truncate_string(&tap.url, TAP_URL_MAX_LEN),
             skills_count,
             is_default: if tap.is_default { "✓" } else { "" },
         });
@@ -263,15 +266,6 @@ fn format_skills_count(installed: usize, available: Option<usize>) -> String {
     format!("{}/{}", installed, available_display)
 }
 
-/// Truncate URL for display
-fn truncate_url(url: &str, max_len: usize) -> String {
-    if url.len() <= max_len {
-        url.to_string()
-    } else {
-        format!("{}...", &url[..max_len.saturating_sub(3)])
-    }
-}
-
 /// Get the registry for a tap (fetches from remote or generates for default)
 pub fn get_tap_registry(db: &Database, tap_name: &str) -> Result<TapRegistry> {
     let tap = db::get_tap(db, tap_name).with_context(|| format!("Tap '{}' not found", tap_name))?;
@@ -324,13 +318,16 @@ mod tests {
 
     #[test]
     fn test_truncate_url_short() {
-        assert_eq!(truncate_url("https://short.url", 50), "https://short.url");
+        assert_eq!(
+            truncate_string("https://short.url", TAP_URL_MAX_LEN),
+            "https://short.url"
+        );
     }
 
     #[test]
     fn test_truncate_url_long() {
         let long_url = "https://github.com/very/long/path/to/repository/that/exceeds/limit";
-        let truncated = truncate_url(long_url, 30);
+        let truncated = truncate_string(long_url, 30);
         assert!(truncated.len() <= 30);
         assert!(truncated.ends_with("..."));
     }

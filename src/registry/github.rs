@@ -151,9 +151,15 @@ pub fn download_skill(
     let bytes = response.bytes()?;
 
     // Get the actual commit SHA from response headers or fetch it
-    let commit_sha = commit
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| get_latest_commit(github_url, Some(skill_path)).unwrap_or_default());
+    let commit_sha = commit.map(|s| s.to_string()).unwrap_or_else(|| {
+        get_latest_commit(github_url, Some(skill_path)).unwrap_or_else(|err| {
+            println!(
+                "Warning: failed to resolve latest commit for {} ({}), using {}",
+                github_url.repo, err, git_ref
+            );
+            git_ref.to_string()
+        })
+    });
 
     // Extract tarball
     let cursor = Cursor::new(bytes);

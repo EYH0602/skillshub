@@ -26,6 +26,14 @@ pub fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
     Ok(())
 }
 
+pub fn truncate_string(value: &str, max_len: usize) -> String {
+    if value.len() <= max_len {
+        value.to_string()
+    } else {
+        format!("{}...", &value[..max_len.saturating_sub(3)])
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -37,7 +45,6 @@ mod tests {
         let src_dir = TempDir::new().unwrap();
         let dst_dir = TempDir::new().unwrap();
 
-        // Create source structure
         fs::write(src_dir.path().join("file1.txt"), "content1").unwrap();
         fs::create_dir(src_dir.path().join("subdir")).unwrap();
         fs::write(src_dir.path().join("subdir/file2.txt"), "content2").unwrap();
@@ -45,7 +52,6 @@ mod tests {
         let dst_path = dst_dir.path().join("copied");
         copy_dir_recursive(src_dir.path(), &dst_path).unwrap();
 
-        // Verify copied structure
         assert!(dst_path.join("file1.txt").exists());
         assert_eq!(
             fs::read_to_string(dst_path.join("file1.txt")).unwrap(),
@@ -56,5 +62,11 @@ mod tests {
             fs::read_to_string(dst_path.join("subdir/file2.txt")).unwrap(),
             "content2"
         );
+    }
+
+    #[test]
+    fn test_truncate_string() {
+        assert_eq!(truncate_string("short", 10), "short");
+        assert_eq!(truncate_string("hello world", 8), "hello...");
     }
 }

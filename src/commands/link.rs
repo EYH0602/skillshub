@@ -158,7 +158,7 @@ fn collect_installed_skills(skills_dir: &Path) -> Result<Vec<Skill>> {
     for skill in skills {
         let link_name = skill_link_name(&skill);
         if !seen.insert(link_name.clone()) {
-            eprintln!(
+            println!(
                 "{} Duplicate skill name '{}' at {}",
                 "Warning:".yellow(),
                 link_name,

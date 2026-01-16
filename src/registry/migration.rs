@@ -53,7 +53,7 @@ pub fn migrate_old_installations() -> Result<()> {
             continue;
         }
 
-        // Skip if this looks like a tap directory (contains subdirectories with SKILL.md)
+        // Tap directories already follow the new layout and should not be moved.
         if is_tap_directory(old_path) {
             continue;
         }
