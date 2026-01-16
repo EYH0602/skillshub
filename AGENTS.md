@@ -94,6 +94,7 @@ skillshub install-all                       # Install all from default tap
 ### Tap Management
 ```bash
 skillshub tap list                          # List configured taps
+# Skills column shows installed/available counts (e.g., 2/15 or 1/?)
 skillshub tap add <github-url>              # Add a third-party tap
 skillshub tap remove <name>                 # Remove a tap
 skillshub tap update [name]                 # Refresh tap registry
@@ -127,6 +128,7 @@ skillshub migrate                           # Migrate old-style installations
 - Before start working, refresh your knowledge from contents in `.agents` first.
 - Always update `README.md` and `CLAUDE.md` when you introduce new features or libraries.
 - Always write unit tests for integration testing and functional testing of new features.
+- Always test your code after your implementation.
 
 #### Scratch Space
 
