@@ -5,7 +5,8 @@ Install skills once and link them to every detected agent so all of your agents 
 
 ## Why Skillshub
 
-- **Tap-based registry**: Install skills from multiple sources (like Homebrew taps)
+- **Direct URL install**: Add skills directly from GitHub URLs - no registry needed
+- **Tap-based registry**: Optionally organize skills into taps (like Homebrew)
 - **One install, many agents**: A single skills registry in `~/.skillshub/skills`
 - **One command to sync**: `skillshub link` wires skills into all detected agents
 - **Version tracking**: Track which commit each skill was installed from
@@ -30,13 +31,10 @@ cargo install --path .
 ## Quick Start
 
 ```bash
-# List available taps
-skillshub tap list
+# Add a skill directly from a GitHub URL (easiest way)
+skillshub add https://github.com/vercel-labs/agent-skills/tree/main/skills/react-best-practices
 
-# List all available skills
-skillshub list
-
-# Install a skill (format: tap/skill)
+# Or install from the default tap
 skillshub install skillshub/code-reviewer
 
 # Link installed skills to every detected agent
@@ -48,16 +46,30 @@ skillshub agents
 
 ## Commands
 
+### Adding Skills from URLs
+
+The easiest way to add skills is directly from GitHub URLs:
+
+```bash
+# Add a skill from any GitHub repository
+skillshub add https://github.com/user/repo/tree/main/skills/my-skill
+
+# Add with a specific commit (permalink)
+skillshub add https://github.com/user/repo/tree/abc1234/skills/my-skill
+```
+
+The skill will be organized under the repository name (e.g., `repo/my-skill`).
+
 ### Skill Management
 
 ```bash
-# List all available skills from all taps
+# List all available and installed skills
 skillshub list
 
 # Search for skills
 skillshub search python
 
-# Install a skill (format: tap/skill)
+# Install a skill from a tap (format: tap/skill)
 skillshub install skillshub/code-reviewer
 
 # Install a specific version (by commit)
@@ -77,15 +89,15 @@ skillshub uninstall skillshub/code-reviewer
 skillshub install-all
 ```
 
-### Tap Management
+### Tap Management (Optional)
 
-Taps are repositories that contain skills. The default `skillshub` tap is included.
+Taps are repositories that contain skills with a registry. The default `skillshub` tap is included.
 
 ```bash
 # List configured taps
 skillshub tap list
 
-# Add a third-party tap
+# Add a third-party tap (requires registry.json)
 skillshub tap add https://github.com/user/my-skills-tap
 
 # Update tap registries
@@ -121,29 +133,14 @@ Skillshub automatically detects and links to these coding agents:
 
 ## How It Works
 
-1. Skills are organized by tap: `~/.skillshub/skills/<tap>/<skill>/`
+1. Skills are organized by source: `~/.skillshub/skills/<repo-or-tap>/<skill>/`
 2. A database at `~/.skillshub/db.json` tracks installed skills and their versions
 3. Running `skillshub link` creates symlinks from each agent's skills directory
 4. Re-run `skillshub link` any time to keep all agents synchronized
 
-## Creating a Tap
+## Skill Format
 
-A tap is a GitHub repository with a `registry.json` file:
-
-```json
-{
-  "name": "my-tap",
-  "description": "My custom skills collection",
-  "skills": {
-    "my-skill": {
-      "path": "skills/my-skill",
-      "description": "What this skill does"
-    }
-  }
-}
-```
-
-Each skill referenced in the registry should have a `SKILL.md` file:
+Each skill folder must contain a `SKILL.md` file with YAML frontmatter:
 
 ```yaml
 ---
@@ -159,6 +156,30 @@ Instructions for the AI agent...
 Optional subdirectories:
 - `scripts/` - Executable scripts the agent can run
 - `references/` - Documentation to be loaded into context
+
+## Creating a Tap (Optional)
+
+For organizing many skills, you can create a tap with a `registry.json`:
+
+```json
+{
+  "name": "my-tap",
+  "description": "My custom skills collection",
+  "skills": {
+    "my-skill": {
+      "path": "skills/my-skill",
+      "description": "What this skill does"
+    }
+  }
+}
+```
+
+Users can then add your tap and install skills from it:
+
+```bash
+skillshub tap add https://github.com/user/my-tap
+skillshub install my-tap/my-skill
+```
 
 ## Migration
 

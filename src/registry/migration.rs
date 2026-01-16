@@ -80,6 +80,8 @@ pub fn migrate_old_installations() -> Result<()> {
                 commit: None,
                 installed_at: Utc::now(),
                 local: true,
+                source_url: None,
+                source_path: None,
             };
             db::add_installed_skill(&mut db, &full_name, installed);
         }

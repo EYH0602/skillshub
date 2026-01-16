@@ -141,6 +141,8 @@ mod tests {
                 commit: None,
                 installed_at: Utc::now(),
                 local: false,
+                source_url: None,
+                source_path: None,
             },
         );
 
@@ -157,6 +159,8 @@ mod tests {
             commit: Some("abc123".to_string()),
             installed_at: Utc::now(),
             local: false,
+            source_url: None,
+            source_path: None,
         };
 
         add_installed_skill(&mut db, "tap/skill", skill);
@@ -196,6 +200,8 @@ mod tests {
             commit: None,
             installed_at: Utc::now(),
             local: false,
+            source_url: None,
+            source_path: None,
         };
         let skill2 = InstalledSkill {
             tap: "tap1".to_string(),
@@ -203,6 +209,8 @@ mod tests {
             commit: None,
             installed_at: Utc::now(),
             local: false,
+            source_url: None,
+            source_path: None,
         };
         let skill3 = InstalledSkill {
             tap: "tap2".to_string(),
@@ -210,6 +218,8 @@ mod tests {
             commit: None,
             installed_at: Utc::now(),
             local: false,
+            source_url: None,
+            source_path: None,
         };
 
         add_installed_skill(&mut db, "tap1/skill1", skill1);

@@ -21,6 +21,12 @@ pub enum Commands {
         name: String,
     },
 
+    /// Add a skill directly from a GitHub URL
+    Add {
+        /// GitHub folder URL (e.g., https://github.com/user/repo/tree/commit/path/to/skill)
+        url: String,
+    },
+
     /// Uninstall a skill (format: tap/skill)
     Uninstall {
         /// Full skill name (e.g., skillshub/skill-creator)

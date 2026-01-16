@@ -49,6 +49,14 @@ pub struct InstalledSkill {
     /// Whether this skill is from local/bundled source (no download needed)
     #[serde(default)]
     pub local: bool,
+
+    /// Source URL for the skill (for remote skills added directly)
+    #[serde(default)]
+    pub source_url: Option<String>,
+
+    /// Path within the repository where this skill lives
+    #[serde(default)]
+    pub source_path: Option<String>,
 }
 
 /// Registry format for remote taps (registry.json in tap repo)
@@ -87,15 +95,28 @@ pub struct GitHubUrl {
     /// Repository name
     pub repo: String,
 
-    /// Branch name (default: "main")
+    /// Branch or commit (default: "main")
     pub branch: String,
 
-    /// Path within the repository (optional, used for context)
-    #[allow(dead_code)]
+    /// Path within the repository (optional)
     pub path: Option<String>,
 }
 
 impl GitHubUrl {
+    /// Check if the branch looks like a commit SHA (40 hex chars or 7+ hex prefix)
+    pub fn is_commit_sha(&self) -> bool {
+        let b = &self.branch;
+        b.len() >= 7 && b.chars().all(|c| c.is_ascii_hexdigit())
+    }
+
+    /// Get the skill name from the path (last component)
+    pub fn skill_name(&self) -> Option<String> {
+        self.path
+            .as_ref()
+            .and_then(|p| p.split('/').last())
+            .map(|s| s.to_string())
+    }
+
     /// Get the full name for use as tap name (repo name)
     pub fn tap_name(&self) -> &str {
         &self.repo

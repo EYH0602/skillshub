@@ -74,6 +74,12 @@ Each agent has its own skills subdirectory name:
 
 ## CLI Commands
 
+### Adding Skills from URLs
+```bash
+skillshub add <github-url>                  # Add skill directly from GitHub URL
+# Example: skillshub add https://github.com/user/repo/tree/commit/path/to/skill
+```
+
 ### Skill Management
 ```bash
 skillshub list                              # List all available skills

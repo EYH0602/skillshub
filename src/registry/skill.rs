@@ -99,6 +99,16 @@ pub fn install_skill(full_name: &str) -> Result<()> {
         commit,
         installed_at: Utc::now(),
         local: is_local,
+        source_url: if is_local {
+            None
+        } else {
+            Some(tap.url.clone())
+        },
+        source_path: if is_local {
+            None
+        } else {
+            Some(skill_entry.path.clone())
+        },
     };
 
     db::add_installed_skill(&mut db, &skill_id.full_name(), installed);
@@ -108,6 +118,105 @@ pub fn install_skill(full_name: &str) -> Result<()> {
         "{} Installed '{}' to {}",
         "✓".green(),
         skill_id.full_name(),
+        dest.display()
+    );
+
+    Ok(())
+}
+
+/// Add a skill directly from a GitHub URL
+///
+/// URL format: https://github.com/owner/repo/tree/commit/path/to/skill
+pub fn add_skill_from_url(url: &str) -> Result<()> {
+    let github_url = parse_github_url(url)?;
+
+    // Must have a path to the skill folder
+    let skill_path = github_url.path.as_ref().with_context(|| {
+        "URL must include path to skill folder (e.g., /tree/main/skills/my-skill)"
+    })?;
+
+    // Get skill name from path
+    let skill_name = github_url
+        .skill_name()
+        .with_context(|| "Could not determine skill name from URL path")?;
+
+    // Use repo name as tap name
+    let tap_name = github_url.tap_name().to_string();
+    let full_name = format!("{}/{}", tap_name, skill_name);
+
+    let mut db = db::init_db()?;
+    let install_dir = get_skills_install_dir()?;
+
+    // Check if already installed
+    if db::is_skill_installed(&db, &full_name) {
+        let installed = db::get_installed_skill(&db, &full_name).unwrap();
+        println!(
+            "{} Skill '{}' is already installed (commit: {})",
+            "Info:".cyan(),
+            full_name,
+            installed.commit.as_deref().unwrap_or("unknown")
+        );
+        println!(
+            "Use '{}' to update it.",
+            format!("skillshub update {}", full_name).bold()
+        );
+        return Ok(());
+    }
+
+    println!(
+        "{} Adding '{}' from {}",
+        "=>".green().bold(),
+        full_name,
+        url
+    );
+
+    // Determine commit to use
+    let commit = if github_url.is_commit_sha() {
+        Some(github_url.branch.clone())
+    } else {
+        None
+    };
+
+    let dest = install_dir.join(&tap_name).join(&skill_name);
+    std::fs::create_dir_all(&dest)?;
+
+    // Download the skill
+    let commit_sha = download_skill(&github_url, skill_path, &dest, commit.as_deref())?;
+
+    // Add tap if it doesn't exist
+    if db::get_tap(&db, &tap_name).is_none() {
+        let tap_url = format!(
+            "https://github.com/{}/{}",
+            github_url.owner, github_url.repo
+        );
+        let tap_info = super::models::TapInfo {
+            url: tap_url,
+            skills_path: "skills".to_string(),
+            updated_at: Some(Utc::now()),
+            is_default: false,
+        };
+        db::add_tap(&mut db, &tap_name, tap_info);
+    }
+
+    // Record installed skill in database
+    let installed = InstalledSkill {
+        tap: tap_name.clone(),
+        skill: skill_name.clone(),
+        commit: Some(commit_sha.clone()),
+        installed_at: Utc::now(),
+        local: false,
+        source_url: Some(url.to_string()),
+        source_path: Some(skill_path.clone()),
+    };
+
+    db::add_installed_skill(&mut db, &full_name, installed);
+    db::save_db(&db)?;
+
+    println!(
+        "{} Added '{}' (commit: {}) to {}",
+        "✓".green(),
+        full_name,
+        commit_sha,
         dest.display()
     );
 
@@ -339,14 +448,10 @@ pub fn update_skill(full_name: Option<&str>) -> Result<()> {
 pub fn list_skills() -> Result<()> {
     let db = db::init_db()?;
 
-    if db.taps.is_empty() {
-        println!("No taps configured. Run 'skillshub tap add <url>' to add one.");
-        return Ok(());
-    }
-
     let mut rows: Vec<SkillListRow> = Vec::new();
+    let mut seen_skills: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-    // Collect skills from all taps
+    // Collect skills from all taps (available skills)
     for (tap_name, _tap) in &db.taps {
         let registry = match get_tap_registry(&db, tap_name) {
             Ok(r) => r,
@@ -355,6 +460,7 @@ pub fn list_skills() -> Result<()> {
 
         for (skill_name, entry) in &registry.skills {
             let full_name = format!("{}/{}", tap_name, skill_name);
+            seen_skills.insert(full_name.clone());
             let installed = db.installed.get(&full_name);
 
             let status = if installed.is_some() { "✓" } else { "○" };
@@ -379,8 +485,41 @@ pub fn list_skills() -> Result<()> {
         }
     }
 
+    // Add installed skills that aren't from tap registries (directly added via URL)
+    for (full_name, installed) in &db.installed {
+        if seen_skills.contains(full_name) {
+            continue;
+        }
+
+        // Get description from installed skill's SKILL.md if available
+        let install_dir = get_skills_install_dir()?;
+        let skill_md_path = install_dir
+            .join(&installed.tap)
+            .join(&installed.skill)
+            .join("SKILL.md");
+
+        let description = if skill_md_path.exists() {
+            crate::skill::parse_skill_metadata(&skill_md_path)
+                .ok()
+                .and_then(|m| m.description)
+                .unwrap_or_else(|| "Added from URL".to_string())
+        } else {
+            "Added from URL".to_string()
+        };
+
+        rows.push(SkillListRow {
+            status: "✓",
+            name: installed.skill.clone(),
+            tap: installed.tap.clone(),
+            description: truncate_string(&description, 50),
+            commit: installed.commit.clone().unwrap_or_else(|| "-".to_string()),
+        });
+    }
+
     if rows.is_empty() {
-        println!("No skills available. Add a tap with 'skillshub tap add <url>'.");
+        println!("No skills available.");
+        println!("  - Add a skill from URL: skillshub add <github-url>");
+        println!("  - Install from default tap: skillshub install skillshub/<skill>");
         return Ok(());
     }
 
@@ -388,6 +527,7 @@ pub fn list_skills() -> Result<()> {
     rows.sort_by(|a, b| (&a.tap, &a.name).cmp(&(&b.tap, &b.name)));
 
     let installed_count = rows.iter().filter(|r| r.status == "✓").count();
+    let total_count = rows.len();
 
     let table = Table::new(rows)
         .with(Style::rounded())
@@ -397,9 +537,9 @@ pub fn list_skills() -> Result<()> {
     println!("{}", table);
     println!();
     println!(
-        "{} installed, {} available",
+        "{} installed, {} total",
         installed_count.to_string().green(),
-        db.installed.len()
+        total_count
     );
 
     Ok(())
@@ -470,35 +610,56 @@ pub fn show_skill_info(full_name: &str) -> Result<()> {
         .with_context(|| format!("Invalid skill name '{}'. Use format: tap/skill", full_name))?;
 
     let db = db::init_db()?;
-
-    // Get tap
-    let _tap = db::get_tap(&db, &skill_id.tap)
-        .with_context(|| format!("Tap '{}' not found", skill_id.tap))?;
-
-    // Get registry entry
-    let registry = get_tap_registry(&db, &skill_id.tap)?;
-    let entry = registry.skills.get(&skill_id.skill).with_context(|| {
-        format!(
-            "Skill '{}' not found in tap '{}'",
-            skill_id.skill, skill_id.tap
-        )
-    })?;
+    let install_dir = get_skills_install_dir()?;
 
     // Check if installed
     let installed = db::get_installed_skill(&db, &skill_id.full_name());
 
+    // Try to get info from tap registry first
+    let tap_entry = db::get_tap(&db, &skill_id.tap)
+        .and_then(|_| get_tap_registry(&db, &skill_id.tap).ok())
+        .and_then(|r| r.skills.get(&skill_id.skill).cloned());
+
+    // If not in tap registry, check if it's installed (directly added skill)
+    if tap_entry.is_none() && installed.is_none() {
+        anyhow::bail!(
+            "Skill '{}' not found. It's neither in a tap registry nor installed.",
+            full_name
+        );
+    }
+
     println!("{}", skill_id.full_name().bold());
     println!();
 
-    if let Some(desc) = &entry.description {
+    // Get description from tap entry or from installed skill's SKILL.md
+    let description = if let Some(entry) = &tap_entry {
+        entry.description.clone()
+    } else if installed.is_some() {
+        // Try to read from installed skill's SKILL.md
+        let skill_path = install_dir.join(&skill_id.tap).join(&skill_id.skill);
+        discover_skills(&install_dir.join(&skill_id.tap))
+            .ok()
+            .and_then(|skills| {
+                skills
+                    .into_iter()
+                    .find(|s| s.name == skill_id.skill || skill_path.join("SKILL.md").exists())
+                    .map(|s| s.description)
+            })
+    } else {
+        None
+    };
+
+    if let Some(desc) = description {
         println!("  {}: {}", "Description".cyan(), desc);
     }
 
     println!("  {}: {}", "Tap".cyan(), skill_id.tap);
-    println!("  {}: {}", "Path".cyan(), entry.path);
 
-    if let Some(homepage) = &entry.homepage {
-        println!("  {}: {}", "Homepage".cyan(), homepage);
+    if let Some(entry) = &tap_entry {
+        println!("  {}: {}", "Path".cyan(), entry.path);
+        if let Some(homepage) = &entry.homepage {
+            println!("  {}: {}", "Homepage".cyan(), homepage);
+        }
     }
 
     println!(
@@ -520,11 +681,13 @@ pub fn show_skill_info(full_name: &str) -> Result<()> {
             "Installed".cyan(),
             inst.installed_at.format("%Y-%m-%d %H:%M")
         );
-    }
 
-    // If installed, show the local path
-    if installed.is_some() {
-        let install_dir = get_skills_install_dir()?;
+        // Show source URL for directly added skills
+        if let Some(url) = &inst.source_url {
+            println!("  {}: {}", "Source".cyan(), url);
+        }
+
+        // Show local path
         let skill_path = install_dir.join(&skill_id.tap).join(&skill_id.skill);
         println!("  {}: {}", "Local path".cyan(), skill_path.display());
     }

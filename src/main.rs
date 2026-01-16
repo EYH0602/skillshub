@@ -12,9 +12,9 @@ use clap::Parser;
 use cli::{Cli, Commands, TapCommands};
 use commands::{link_to_agents, show_agents};
 use registry::{
-    add_tap, install_all, install_skill, list_skills, list_taps, migrate_old_installations,
-    needs_migration, remove_tap, search_skills, show_skill_info, uninstall_skill, update_skill,
-    update_tap,
+    add_skill_from_url, add_tap, install_all, install_skill, list_skills, list_taps,
+    migrate_old_installations, needs_migration, remove_tap, search_skills, show_skill_info,
+    uninstall_skill, update_skill, update_tap,
 };
 
 fn main() -> Result<()> {
@@ -30,6 +30,7 @@ fn main() -> Result<()> {
     match cli.command {
         Commands::InstallAll => install_all()?,
         Commands::Install { name } => install_skill(&name)?,
+        Commands::Add { url } => add_skill_from_url(&url)?,
         Commands::Uninstall { name } => uninstall_skill(&name)?,
         Commands::Update { name } => update_skill(name.as_deref())?,
         Commands::List => list_skills()?,

@@ -7,7 +7,7 @@ pub mod tap;
 
 pub use migration::{migrate_old_installations, needs_migration};
 pub use skill::{
-    install_all, install_skill, list_skills, search_skills, show_skill_info, uninstall_skill,
-    update_skill,
+    add_skill_from_url, install_all, install_skill, list_skills, search_skills, show_skill_info,
+    uninstall_skill, update_skill,
 };
 pub use tap::{add_tap, list_taps, remove_tap, update_tap};
