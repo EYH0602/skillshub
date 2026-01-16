@@ -31,10 +31,10 @@ pub fn show_agents() -> Result<()> {
             let link_path = agent.path.join(agent.skills_subdir);
 
             let status = if link_path.exists() {
-                if link_path.is_symlink() {
+                if link_path.is_symlink() || link_path.is_dir() {
                     "✓ linked"
                 } else {
-                    "! not symlink"
+                    "! not linked"
                 }
             } else {
                 "○ not linked"
