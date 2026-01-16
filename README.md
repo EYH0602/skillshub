@@ -23,7 +23,7 @@ cargo install skillshub
 ### From Source
 
 ```bash
-git clone https://github.com/yfhe/skillshub
+git clone https://github.com/EYH0602/skillshub
 cd skillshub
 cargo install --path .
 ```
