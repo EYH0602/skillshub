@@ -136,7 +136,7 @@ pub fn link_to_agents() -> Result<()> {
 
             // Skip if this is the source agent (skill already exists there)
             let current_agent_name = format!(".{}", agent_name);
-            if ext_skill.source_agent == current_agent_name || ext_skill.source_agent == agent_name.to_string() {
+            if ext_skill.source_agent == current_agent_name || ext_skill.source_agent == agent_name {
                 continue;
             }
 
