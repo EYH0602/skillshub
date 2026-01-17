@@ -9,7 +9,7 @@ use crate::agent::{discover_agents, known_agent_names, AgentInfo};
 use crate::paths::get_skills_install_dir;
 use crate::registry::db::{add_external_skill, init_db, is_external_skill, save_db};
 use crate::registry::models::{Database, ExternalSkill};
-use crate::skill::{discover_skills, Skill};
+use crate::skill::Skill;
 
 /// Link installed skills to all discovered coding agents
 pub fn link_to_agents() -> Result<()> {
@@ -51,14 +51,6 @@ pub fn link_to_agents() -> Result<()> {
     } else {
         Vec::new()
     };
-
-    if skills.is_empty() && all_external.is_empty() {
-        println!(
-            "{} No skills found. Install skills or use agents with existing skills.",
-            "Info:".cyan()
-        );
-        return Ok(());
-    }
 
     println!(
         "{} Linking skills to {} discovered agent(s)",
@@ -160,6 +152,9 @@ pub fn link_to_agents() -> Result<()> {
             external_synced += 1;
         }
 
+        // Mark agent as linked in the database
+        db.linked_agents.insert(agent_name.to_string());
+
         // Print status
         let mut parts = vec![format!("linked {}", linked_count)];
         if external_synced > 0 {
@@ -170,6 +165,9 @@ pub fn link_to_agents() -> Result<()> {
         }
         println!("  {} {} ({})", "✓".green(), agent_name, parts.join(", "));
     }
+
+    // Save the database with linked agents
+    save_db(&db)?;
 
     println!("\n{} Skills linked successfully!", "Done!".green().bold());
 
@@ -269,10 +267,19 @@ fn skill_link_name(skill: &Skill) -> String {
 }
 
 fn collect_installed_skills(skills_dir: &Path) -> Result<Vec<Skill>> {
-    let mut skills = discover_skills(skills_dir)?;
+    let mut skills = Vec::new();
 
-    if skills_dir.exists() {
-        for entry in fs::read_dir(skills_dir)? {
+    if !skills_dir.exists() {
+        return Ok(skills);
+    }
+
+    // Recursively find all SKILL.md files in the skills directory
+    fn find_skills_recursive(dir: &Path, skills: &mut Vec<Skill>) -> Result<()> {
+        if !dir.exists() || !dir.is_dir() {
+            return Ok(());
+        }
+
+        for entry in fs::read_dir(dir)? {
             let entry = entry?;
             let path = entry.path();
 
@@ -280,14 +287,41 @@ fn collect_installed_skills(skills_dir: &Path) -> Result<Vec<Skill>> {
                 continue;
             }
 
-            if path.join("SKILL.md").exists() {
-                continue;
-            }
+            let skill_md = path.join("SKILL.md");
+            if skill_md.exists() {
+                // Found a skill directory
+                match crate::skill::parse_skill_metadata(&skill_md) {
+                    Ok(metadata) => {
+                        let has_scripts = path.join("scripts").exists();
+                        let has_references = path.join("references").exists() || path.join("resources").exists();
 
-            let mut tap_skills = discover_skills(&path)?;
-            skills.append(&mut tap_skills);
+                        skills.push(Skill {
+                            name: metadata.name,
+                            description: metadata.description.unwrap_or_else(|| "No description".to_string()),
+                            path,
+                            has_scripts,
+                            has_references,
+                        });
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "{} Failed to parse skill at {}: {}",
+                            "Warning:".yellow(),
+                            path.display(),
+                            e
+                        );
+                    }
+                }
+            } else {
+                // Not a skill directory, recurse into it
+                find_skills_recursive(&path, skills)?;
+            }
         }
+
+        Ok(())
     }
+
+    find_skills_recursive(skills_dir, &mut skills)?;
 
     let mut seen = HashSet::new();
     let mut unique = Vec::new();

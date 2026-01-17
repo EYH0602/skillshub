@@ -24,6 +24,8 @@ pub struct AgentRow {
     pub name: String,
     #[tabled(rename = "Status")]
     pub status: &'static str,
+    #[tabled(rename = "Skills")]
+    pub skills: String,
     #[tabled(rename = "Path")]
     pub path: String,
 }

@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 /// The main database stored at ~/.skillshub/db.json
@@ -18,6 +18,11 @@ pub struct Database {
     /// These are skills found in agent directories that weren't installed via skillshub
     #[serde(default)]
     pub external: HashMap<String, ExternalSkill>,
+
+    /// Agents that have been linked (e.g., ".claude", ".codex")
+    /// This tracks which agents skillshub has set up, regardless of skill count
+    #[serde(default)]
+    pub linked_agents: HashSet<String>,
 }
 
 /// Information about a configured tap
