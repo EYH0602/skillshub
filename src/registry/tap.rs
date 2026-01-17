@@ -7,7 +7,7 @@ use tabled::{
 };
 
 use super::db::{self, DEFAULT_TAP_NAME};
-use super::github::{fetch_directory_registry, fetch_tap_registry, parse_github_url};
+use super::github::{discover_skills_from_repo, parse_github_url};
 use super::models::{Database, TapInfo, TapRegistry};
 use crate::util::truncate_string;
 
@@ -29,7 +29,7 @@ pub struct TapRow {
 /// Add a new tap from a GitHub URL
 pub fn add_tap(url: &str) -> Result<()> {
     let github_url = parse_github_url(url)?;
-    let tap_name = github_url.tap_name().to_string();
+    let tap_name = github_url.tap_name();
 
     let mut db = db::init_db()?;
 
@@ -42,16 +42,17 @@ pub fn add_tap(url: &str) -> Result<()> {
         );
     }
 
-    println!("{} Adding tap '{}' from {}", "=>".green().bold(), tap_name, url);
+    let base_url = github_url.base_url();
+    println!("{} Adding tap '{}' from {}", "=>".green().bold(), tap_name, base_url);
 
-    // Verify the tap has a valid registry.json
-    println!("  {} Fetching registry...", "○".yellow());
-    let registry = fetch_tap_registry(&github_url, "registry.json")
-        .with_context(|| format!("Failed to fetch registry from {}", url))?;
+    // Discover skills by scanning for SKILL.md files
+    println!("  {} Discovering skills...", "○".yellow());
+    let registry = discover_skills_from_repo(&github_url, &tap_name)
+        .with_context(|| format!("Failed to discover skills from {}", base_url))?;
 
     let tap_info = TapInfo {
-        url: url.to_string(),
-        skills_path: "skills".to_string(), // Default, could be configured
+        url: base_url.clone(),
+        skills_path: "skills".to_string(),
         updated_at: Some(Utc::now()),
         is_default: false,
         is_bundled: false,
@@ -209,13 +210,7 @@ pub fn update_tap(name: Option<&str>) -> Result<()> {
 /// Update a single tap and return skill count
 fn update_single_tap(name: &str, tap: &TapInfo) -> Result<usize> {
     let github_url = parse_github_url(&tap.url)?;
-    let registry = fetch_tap_registry(&github_url, "registry.json")?;
-
-    // Verify name matches
-    if registry.name != name {
-        anyhow::bail!("Registry name mismatch: expected '{}', got '{}'", name, registry.name);
-    }
-
+    let registry = discover_skills_from_repo(&github_url, name)?;
     Ok(registry.skills.len())
 }
 
@@ -249,13 +244,10 @@ pub fn get_tap_registry(db: &Database, tap_name: &str) -> Result<TapRegistry> {
     if tap.is_bundled {
         // Generate registry from local skills
         generate_local_registry()
-    } else if tap.is_default {
-        let github_url = parse_github_url(&tap.url)?;
-        fetch_directory_registry(&github_url, tap_name, &tap.skills_path)
     } else {
-        // Fetch from remote
+        // Discover skills from remote repo by scanning for SKILL.md files
         let github_url = parse_github_url(&tap.url)?;
-        fetch_tap_registry(&github_url, "registry.json")
+        discover_skills_from_repo(&github_url, tap_name)
     }
 }
 

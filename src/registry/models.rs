@@ -121,9 +121,14 @@ impl GitHubUrl {
             .map(|s| s.to_string())
     }
 
-    /// Get the full name for use as tap name (repo name)
-    pub fn tap_name(&self) -> &str {
-        &self.repo
+    /// Get the full name for use as tap name (owner/repo format)
+    pub fn tap_name(&self) -> String {
+        format!("{}/{}", self.owner, self.repo)
+    }
+
+    /// Get the base URL for display (without /tree/branch/path)
+    pub fn base_url(&self) -> String {
+        format!("https://github.com/{}/{}", self.owner, self.repo)
     }
 
     /// Get the API URL for the repository
@@ -156,22 +161,32 @@ pub struct SkillId {
 }
 
 impl SkillId {
-    /// Parse a skill ID from string (e.g., "skillshub/code-reviewer")
+    /// Parse a skill ID from string
+    /// Supports formats:
+    /// - "owner/repo/skill" (new format with owner/repo tap names)
+    /// - "tap/skill" (legacy format)
+    /// - "owner/repo/skill@commit" (with commit suffix)
     pub fn parse(s: &str) -> Option<Self> {
-        let parts: Vec<&str> = s.splitn(2, '/').collect();
-        if parts.len() == 2 && !parts[0].is_empty() && !parts[1].is_empty() {
-            // Handle optional @commit suffix
-            let skill = parts[1].split('@').next().unwrap_or(parts[1]);
-            Some(Self {
+        // Remove optional @commit suffix for parsing
+        let base = s.split('@').next().unwrap_or(s);
+        let parts: Vec<&str> = base.split('/').collect();
+
+        match parts.len() {
+            // owner/repo/skill format (new)
+            3 if !parts[0].is_empty() && !parts[1].is_empty() && !parts[2].is_empty() => Some(Self {
+                tap: format!("{}/{}", parts[0], parts[1]),
+                skill: parts[2].to_string(),
+            }),
+            // tap/skill format (legacy)
+            2 if !parts[0].is_empty() && !parts[1].is_empty() => Some(Self {
                 tap: parts[0].to_string(),
-                skill: skill.to_string(),
-            })
-        } else {
-            None
+                skill: parts[1].to_string(),
+            }),
+            _ => None,
         }
     }
 
-    /// Parse commit from skill ID (e.g., "tap/skill@abc123" -> Some("abc123"))
+    /// Parse commit from skill ID (e.g., "owner/repo/skill@abc123" -> Some("abc123"))
     pub fn parse_commit(s: &str) -> Option<String> {
         s.split('@').nth(1).map(|s| s.to_string())
     }
@@ -193,19 +208,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_skill_id_parse_valid() {
+    fn test_skill_id_parse_legacy_format() {
+        // Legacy tap/skill format
         let id = SkillId::parse("skillshub/code-reviewer").unwrap();
         assert_eq!(id.tap, "skillshub");
         assert_eq!(id.skill, "code-reviewer");
     }
 
     #[test]
+    fn test_skill_id_parse_new_format() {
+        // New owner/repo/skill format
+        let id = SkillId::parse("EYH0602/skillshub/code-reviewer").unwrap();
+        assert_eq!(id.tap, "EYH0602/skillshub");
+        assert_eq!(id.skill, "code-reviewer");
+    }
+
+    #[test]
     fn test_skill_id_parse_with_commit() {
+        // Legacy format with commit
         let id = SkillId::parse("tap/skill@abc123").unwrap();
         assert_eq!(id.tap, "tap");
         assert_eq!(id.skill, "skill");
 
-        let commit = SkillId::parse_commit("tap/skill@abc123");
+        // New format with commit
+        let id2 = SkillId::parse("owner/repo/skill@abc123").unwrap();
+        assert_eq!(id2.tap, "owner/repo");
+        assert_eq!(id2.skill, "skill");
+
+        let commit = SkillId::parse_commit("owner/repo/skill@abc123");
         assert_eq!(commit, Some("abc123".to_string()));
     }
 
@@ -215,15 +245,16 @@ mod tests {
         assert!(SkillId::parse("/skill").is_none());
         assert!(SkillId::parse("tap/").is_none());
         assert!(SkillId::parse("").is_none());
+        assert!(SkillId::parse("a/b/c/d").is_none()); // too many parts
     }
 
     #[test]
     fn test_skill_id_full_name() {
         let id = SkillId {
-            tap: "my-tap".to_string(),
+            tap: "owner/repo".to_string(),
             skill: "my-skill".to_string(),
         };
-        assert_eq!(id.full_name(), "my-tap/my-skill");
+        assert_eq!(id.full_name(), "owner/repo/my-skill");
     }
 
     #[test]
@@ -235,7 +266,8 @@ mod tests {
             path: Some("skills".to_string()),
         };
 
-        assert_eq!(url.tap_name(), "repo");
+        assert_eq!(url.tap_name(), "user/repo");
+        assert_eq!(url.base_url(), "https://github.com/user/repo");
         assert_eq!(url.api_url(), "https://api.github.com/repos/user/repo");
         assert_eq!(
             url.tarball_url("main"),

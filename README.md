@@ -31,12 +31,15 @@ cargo install --path .
 ## Quick Start
 
 ```bash
-# Add a skill directly from a GitHub URL (easiest way)
-skillshub add https://github.com/vercel-labs/agent-skills/tree/main/skills/react-best-practices
+# Install from the default tap (bundled skills)
+skillshub install EYH0602/skillshub/code-reviewer
 
-# Or install from the default taps
-skillshub install skillshub/code-reviewer
-skillshub install anthropics/<skill-name>
+# Or add third-party taps and install from them
+skillshub tap add https://github.com/anthropics/skills
+skillshub install anthropics/skills/frontend-design
+
+skillshub tap add https://github.com/vercel-labs/agent-skills
+skillshub install vercel-labs/agent-skills/vercel-deploy
 
 # Link installed skills to every detected agent
 skillshub link
@@ -59,7 +62,7 @@ skillshub add https://github.com/user/repo/tree/main/skills/my-skill
 skillshub add https://github.com/user/repo/tree/abc1234/skills/my-skill
 ```
 
-The skill will be organized under the repository name (e.g., `repo/my-skill`).
+The skill will be organized under the repository identifier (e.g., `owner/repo/my-skill`).
 
 ### Skill Management
 
@@ -70,21 +73,21 @@ skillshub list
 # Search for skills
 skillshub search python
 
-# Install a skill from a tap (format: tap/skill)
-skillshub install skillshub/code-reviewer
+# Install a skill from a tap (format: owner/repo/skill)
+skillshub install EYH0602/skillshub/code-reviewer
 
 # Install a specific version (by commit)
-skillshub install skillshub/code-reviewer@abc1234
+skillshub install EYH0602/skillshub/code-reviewer@abc1234
 
 # Show detailed info about a skill
-skillshub info skillshub/code-reviewer
+skillshub info EYH0602/skillshub/code-reviewer
 
 # Update installed skills to latest version
-skillshub update                           # Update all
-skillshub update skillshub/code-reviewer   # Update one
+skillshub update                                    # Update all
+skillshub update EYH0602/skillshub/code-reviewer    # Update one
 
 # Uninstall a skill
-skillshub uninstall skillshub/code-reviewer
+skillshub uninstall EYH0602/skillshub/code-reviewer
 
 # Install all skills from the default taps
 skillshub install-all
@@ -92,22 +95,23 @@ skillshub install-all
 
 ### Tap Management (Optional)
 
-Taps are repositories that provide skills (typically via a registry.json). Default taps include `skillshub` (bundled) and `anthropics` (remote).
+Taps are Git repositories containing skills. Skills are automatically discovered by scanning for folders with `SKILL.md` files - no special configuration required.
 
 ```bash
 # List configured taps
 skillshub tap list
 # Skills column shows installed/available counts (e.g., 2/15 or 1/?)
 
-# Add a third-party tap (requires registry.json)
-skillshub tap add https://github.com/user/my-skills-tap
+# Add third-party taps (any GitHub repo with SKILL.md files)
+skillshub tap add https://github.com/anthropics/skills
+skillshub tap add https://github.com/vercel-labs/agent-skills
 
-# Update tap registries
-skillshub tap update            # Update all taps
-skillshub tap update my-tap     # Update specific tap
+# Update tap registries (re-discover skills)
+skillshub tap update                        # Update all taps
+skillshub tap update anthropics/skills      # Update specific tap
 
 # Remove a tap
-skillshub tap remove my-tap
+skillshub tap remove vercel-labs/agent-skills
 ```
 
 ### Agent Linking
@@ -133,9 +137,22 @@ Skillshub automatically detects and links to these coding agents:
 | Cursor   | `~/.cursor`   | `~/.cursor/skills`   |
 | Continue | `~/.continue` | `~/.continue/skills` |
 
+## GitHub API Rate Limiting
+
+Skillshub uses the GitHub API to discover skills in repositories. Unauthenticated requests are limited to 60 per hour, which may cause errors when adding taps or listing skills.
+
+To avoid rate limiting, set a GitHub personal access token:
+
+```bash
+export GITHUB_TOKEN=your_token_here
+skillshub tap add https://github.com/anthropics/skills
+```
+
+You can generate a token at https://github.com/settings/tokens (no special scopes needed for public repos).
+
 ## How It Works
 
-1. Skills are organized by source: `~/.skillshub/skills/<repo-or-tap>/<skill>/`
+1. Skills are organized by source: `~/.skillshub/skills/<owner>/<repo>/<skill>/`
 2. A database at `~/.skillshub/db.json` tracks installed skills and their versions
 3. Running `skillshub link` creates per-skill symlinks in each agent's skills directory
 4. Re-run `skillshub link` any time to keep all agents synchronized
@@ -161,26 +178,26 @@ Optional subdirectories:
 
 ## Creating a Tap (Optional)
 
-For organizing many skills, you can create a tap with a `registry.json`:
+Any GitHub repository can be a tap. Just add folders with `SKILL.md` files anywhere in your repo:
 
-```json
-{
-  "name": "my-tap",
-  "description": "My custom skills collection",
-  "skills": {
-    "my-skill": {
-      "path": "skills/my-skill",
-      "description": "What this skill does"
-    }
-  }
-}
+```
+my-skills-repo/
+├── skills/
+│   ├── python-testing/
+│   │   └── SKILL.md
+│   └── code-review/
+│       └── SKILL.md
+├── advanced/
+│   └── refactoring/
+│       └── SKILL.md
+└── README.md
 ```
 
-Users can then add your tap and install skills from it:
+All skills are automatically discovered when users add your repo:
 
 ```bash
-skillshub tap add https://github.com/user/my-tap
-skillshub install my-tap/my-skill
+skillshub tap add https://github.com/user/my-skills-repo
+skillshub install my-skills-repo/python-testing
 ```
 
 ## Migration

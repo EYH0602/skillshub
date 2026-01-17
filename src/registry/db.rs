@@ -5,18 +5,11 @@ use std::path::PathBuf;
 use super::models::{Database, InstalledSkill, TapInfo};
 use crate::paths::get_skillshub_home;
 
-/// Default tap name for bundled skills
-pub const DEFAULT_TAP_NAME: &str = "skillshub";
+/// Default tap name for bundled skills (owner/repo format)
+pub const DEFAULT_TAP_NAME: &str = "EYH0602/skillshub";
 
 /// Default tap URL (this repository)
-pub const DEFAULT_TAP_URL: &str = "https://github.com/yfhe/skillshub";
-
-/// Default tap name for Anthropics skills
-pub const ANTHROPIC_TAP_NAME: &str = "anthropics";
-
-/// Default tap URL for Anthropics skills (pinned commit)
-pub const ANTHROPIC_TAP_URL: &str =
-    "https://github.com/anthropics/skills/tree/69c0b1a0674149f27b61b2635f935524b6add202";
+pub const DEFAULT_TAP_URL: &str = "https://github.com/EYH0602/skillshub";
 
 /// Get the path to the database file (~/.skillshub/db.json)
 pub fn get_db_path() -> Result<PathBuf> {
@@ -56,28 +49,16 @@ pub fn save_db(db: &Database) -> Result<()> {
 }
 
 fn default_taps() -> Vec<(&'static str, TapInfo)> {
-    vec![
-        (
-            DEFAULT_TAP_NAME,
-            TapInfo {
-                url: DEFAULT_TAP_URL.to_string(),
-                skills_path: "skills".to_string(),
-                updated_at: None,
-                is_default: true,
-                is_bundled: true,
-            },
-        ),
-        (
-            ANTHROPIC_TAP_NAME,
-            TapInfo {
-                url: ANTHROPIC_TAP_URL.to_string(),
-                skills_path: "skills".to_string(),
-                updated_at: None,
-                is_default: true,
-                is_bundled: false,
-            },
-        ),
-    ]
+    vec![(
+        DEFAULT_TAP_NAME,
+        TapInfo {
+            url: DEFAULT_TAP_URL.to_string(),
+            skills_path: "skills".to_string(),
+            updated_at: None,
+            is_default: true,
+            is_bundled: true,
+        },
+    )]
 }
 
 fn ensure_default_taps(db: &mut Database) -> bool {
@@ -161,16 +142,13 @@ mod tests {
         let mut db = Database::default();
         assert!(ensure_default_taps(&mut db));
         assert!(db.taps.contains_key(DEFAULT_TAP_NAME));
-        assert!(db.taps.contains_key(ANTHROPIC_TAP_NAME));
+        assert_eq!(db.taps.len(), 1); // Only bundled tap
 
         let bundled = db.taps.get(DEFAULT_TAP_NAME).unwrap();
         assert!(bundled.is_default);
         assert!(bundled.is_bundled);
 
-        let anthropic = db.taps.get(ANTHROPIC_TAP_NAME).unwrap();
-        assert!(anthropic.is_default);
-        assert!(!anthropic.is_bundled);
-
+        // Calling again should return false (no changes)
         assert!(!ensure_default_taps(&mut db));
     }
 
