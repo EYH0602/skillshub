@@ -173,6 +173,7 @@ pub fn add_skill_from_url(url: &str) -> Result<()> {
             updated_at: Some(Utc::now()),
             is_default: false,
             is_bundled: false,
+            cached_registry: None, // Cache will be populated on next tap update
         };
         db::add_tap(&mut db, &tap_name, tap_info);
     }

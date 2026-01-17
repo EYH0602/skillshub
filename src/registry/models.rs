@@ -39,6 +39,11 @@ pub struct TapInfo {
     /// Whether this tap is bundled locally with the binary
     #[serde(default)]
     pub is_bundled: bool,
+
+    /// Cached skill registry to avoid repeated GitHub API calls
+    /// This is populated when the tap is added or updated
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cached_registry: Option<TapRegistry>,
 }
 
 /// Information about an installed skill
@@ -319,9 +324,108 @@ mod tests {
             updated_at: None,
             is_default: false,
             is_bundled: false,
+            cached_registry: None,
         };
 
         let json = serde_json::to_string(&tap).unwrap();
         assert!(json.contains("user/repo"));
+        // cached_registry should be skipped when None
+        assert!(!json.contains("cached_registry"));
+    }
+
+    #[test]
+    fn test_tap_info_with_cached_registry() {
+        let mut skills = HashMap::new();
+        skills.insert(
+            "my-skill".to_string(),
+            SkillEntry {
+                path: "skills/my-skill".to_string(),
+                description: Some("A test skill".to_string()),
+                homepage: None,
+            },
+        );
+
+        let registry = TapRegistry {
+            name: "test-tap".to_string(),
+            description: Some("Test tap".to_string()),
+            skills,
+        };
+
+        let tap = TapInfo {
+            url: "https://github.com/user/repo".to_string(),
+            skills_path: "skills".to_string(),
+            updated_at: None,
+            is_default: false,
+            is_bundled: false,
+            cached_registry: Some(registry),
+        };
+
+        let json = serde_json::to_string(&tap).unwrap();
+        assert!(json.contains("cached_registry"));
+        assert!(json.contains("my-skill"));
+        assert!(json.contains("A test skill"));
+    }
+
+    #[test]
+    fn test_tap_info_deserialize_without_cache() {
+        // Simulate loading old database format without cached_registry field
+        let json = r#"{
+            "url": "https://github.com/user/repo",
+            "skills_path": "skills",
+            "updated_at": null,
+            "is_default": false,
+            "is_bundled": false
+        }"#;
+
+        let tap: TapInfo = serde_json::from_str(json).unwrap();
+        assert!(tap.cached_registry.is_none());
+    }
+
+    #[test]
+    fn test_tap_info_roundtrip_with_cache() {
+        let mut skills = HashMap::new();
+        skills.insert(
+            "skill1".to_string(),
+            SkillEntry {
+                path: "skills/skill1".to_string(),
+                description: Some("First skill".to_string()),
+                homepage: Some("https://example.com".to_string()),
+            },
+        );
+        skills.insert(
+            "skill2".to_string(),
+            SkillEntry {
+                path: "other/skill2".to_string(),
+                description: None,
+                homepage: None,
+            },
+        );
+
+        let registry = TapRegistry {
+            name: "my-tap".to_string(),
+            description: None,
+            skills,
+        };
+
+        let tap = TapInfo {
+            url: "https://github.com/owner/repo".to_string(),
+            skills_path: "skills".to_string(),
+            updated_at: Some(chrono::Utc::now()),
+            is_default: false,
+            is_bundled: false,
+            cached_registry: Some(registry),
+        };
+
+        // Serialize and deserialize
+        let json = serde_json::to_string(&tap).unwrap();
+        let restored: TapInfo = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(restored.url, tap.url);
+        assert!(restored.cached_registry.is_some());
+        let cached = restored.cached_registry.unwrap();
+        assert_eq!(cached.name, "my-tap");
+        assert_eq!(cached.skills.len(), 2);
+        assert!(cached.skills.contains_key("skill1"));
+        assert!(cached.skills.contains_key("skill2"));
     }
 }
