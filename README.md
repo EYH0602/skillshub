@@ -137,6 +137,19 @@ Skillshub automatically detects and links to these coding agents:
 | Cursor   | `~/.cursor`   | `~/.cursor/skills`   |
 | Continue | `~/.continue` | `~/.continue/skills` |
 
+## GitHub API Rate Limiting
+
+Skillshub uses the GitHub API to discover skills in repositories. Unauthenticated requests are limited to 60 per hour, which may cause errors when adding taps or listing skills.
+
+To avoid rate limiting, set a GitHub personal access token:
+
+```bash
+export GITHUB_TOKEN=your_token_here
+skillshub tap add https://github.com/anthropics/skills
+```
+
+You can generate a token at https://github.com/settings/tokens (no special scopes needed for public repos).
+
 ## How It Works
 
 1. Skills are organized by source: `~/.skillshub/skills/<owner>/<repo>/<skill>/`
