@@ -139,8 +139,7 @@ skillshub external scan
 skillshub external forget my-skill
 ```
 
-When you run `skillshub link`, external skills are automatically discovered and synced to all other agents.
-The first agent where a skill is found becomes the "source of truth" (Claude is checked first).
+When you run `skillshub link`, external skills are automatically discovered from all agent directories and synced to all other agents. If the same skill name exists in multiple agents, the first one found is used as the source.
 
 ## Supported Agents
 

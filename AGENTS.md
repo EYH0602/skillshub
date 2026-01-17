@@ -124,7 +124,7 @@ skillshub external scan                     # Scan for external skills
 skillshub external forget <name>            # Stop tracking an external skill
 ```
 
-External skills are skills found in agent directories that weren't installed via skillshub (e.g., from Claude marketplace or manual installation). They are automatically discovered during `skillshub link` and synced to all other agents.
+External skills are skills found in agent directories that weren't installed via skillshub (e.g., from Claude marketplace or manual installation). They are automatically discovered from all agent directories during `skillshub link` and synced to all other agents.
 
 ### Migration
 ```bash
