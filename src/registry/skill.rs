@@ -10,6 +10,7 @@ use super::db;
 use super::github::{download_skill, get_latest_commit, parse_github_url};
 use super::models::{InstalledSkill, SkillId};
 use super::tap::get_tap_registry;
+use crate::commands::link_to_agents;
 use crate::paths::{get_embedded_skills_dir, get_skills_install_dir};
 use crate::skill::discover_skills;
 use crate::util::{copy_dir_recursive, truncate_string};
@@ -33,6 +34,18 @@ pub struct SkillListRow {
 
 /// Install a skill by full name (tap/skill[@commit])
 pub fn install_skill(full_name: &str) -> Result<()> {
+    let installed = install_skill_internal(full_name)?;
+
+    if installed {
+        // Auto-link to all agents
+        link_to_agents()?;
+    }
+
+    Ok(())
+}
+
+/// Internal skill installation without auto-linking (for batch operations)
+fn install_skill_internal(full_name: &str) -> Result<bool> {
     let skill_id = SkillId::parse(full_name)
         .with_context(|| format!("Invalid skill name '{}'. Use format: tap/skill", full_name))?;
 
@@ -50,7 +63,7 @@ pub fn install_skill(full_name: &str) -> Result<()> {
             skill_id.full_name(),
             installed.commit.as_deref().unwrap_or("local")
         );
-        return Ok(());
+        return Ok(false);
     }
 
     // Get tap info
@@ -106,7 +119,7 @@ pub fn install_skill(full_name: &str) -> Result<()> {
         dest.display()
     );
 
-    Ok(())
+    Ok(true)
 }
 
 /// Add a skill directly from a GitHub URL
@@ -199,6 +212,9 @@ pub fn add_skill_from_url(url: &str) -> Result<()> {
         commit_sha,
         dest.display()
     );
+
+    // Auto-link to all agents
+    link_to_agents()?;
 
     Ok(())
 }
@@ -722,8 +738,9 @@ pub fn install_all() -> Result<()> {
                 continue;
             }
 
-            match install_skill(&full_name) {
-                Ok(()) => installed_count += 1,
+            match install_skill_internal(&full_name) {
+                Ok(true) => installed_count += 1,
+                Ok(false) => {}
                 Err(e) => {
                     println!("  {} {} ({})", "✗".red(), full_name, e);
                 }
@@ -732,6 +749,11 @@ pub fn install_all() -> Result<()> {
     }
 
     println!("\n{} Installed {} skills", "Done!".green().bold(), installed_count);
+
+    // Auto-link to all agents (once after all installations)
+    if installed_count > 0 {
+        link_to_agents()?;
+    }
 
     Ok(())
 }
