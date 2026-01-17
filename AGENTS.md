@@ -39,9 +39,8 @@ skillshub/
 
 ## Key Concepts
 
-- **Taps**: Repositories containing skills (like Homebrew taps)
+- **Taps**: Git repositories containing skills (like Homebrew taps). Skills are auto-discovered by scanning for `SKILL.md` files.
 - **Skills**: Reusable instruction sets for AI coding agents, defined in `SKILL.md` files
-- **Registry**: A `registry.json` file in each tap listing available skills
 - **Database**: `~/.skillshub/db.json` tracks installed skills and their versions
 - **Installation**: Skills are downloaded/copied to `~/.skillshub/skills/<tap>/<skill>/`
 - **Linking**: Per-skill symlinks are created from agent skill directories
@@ -52,11 +51,10 @@ skillshub/
 ```
 GitHub Tap Repository          Local Database           Installed Skills
 ┌─────────────────────┐       ┌──────────────┐        ┌─────────────────────┐
-│ registry.json       │──────▶│ db.json      │◀──────▶│ ~/.skillshub/       │
-│ skills/             │       │ - taps       │        │   skills/           │
-│   skill-a/          │       │ - installed  │        │     tap/skill/      │
-│   skill-b/          │       └──────────────┘        └─────────────────────┘
-└─────────────────────┘
+│ any/path/           │──────▶│ db.json      │◀──────▶│ ~/.skillshub/       │
+│   SKILL.md          │       │ - taps       │        │   skills/           │
+│   (auto-discovered) │       │ - installed  │        │     tap/skill/      │
+└─────────────────────┘       └──────────────┘        └─────────────────────┘
 ```
 
 ## Supported Agents
@@ -84,23 +82,23 @@ skillshub add <github-url>                  # Add skill directly from GitHub URL
 ```bash
 skillshub list                              # List all available skills
 skillshub search <query>                    # Search skills across all taps
-skillshub install <tap/skill>[@commit]      # Install a skill
-skillshub uninstall <tap/skill>             # Remove installed skill
-skillshub update [tap/skill]                # Update skill(s) to latest
-skillshub info <tap/skill>                  # Show skill details
-skillshub install-all                       # Install all from default taps
+skillshub install <owner/repo/skill>[@commit]  # Install a skill
+skillshub uninstall <owner/repo/skill>      # Remove installed skill
+skillshub update [owner/repo/skill]         # Update skill(s) to latest
+skillshub info <owner/repo/skill>           # Show skill details
+skillshub install-all                       # Install all from default tap
 ```
 
 ### Tap Management
 
-Default taps include `skillshub` (bundled) and `anthropics` (remote).
+The default tap is `EYH0602/skillshub` (bundled). Add third-party taps like `anthropics/skills` or `vercel-labs/agent-skills`.
 
 ```bash
 skillshub tap list                          # List configured taps
 # Skills column shows installed/available counts (e.g., 2/15 or 1/?)
 skillshub tap add <github-url>              # Add a third-party tap
-skillshub tap remove <name>                 # Remove a tap
-skillshub tap update [name]                 # Refresh tap registry
+skillshub tap remove <owner/repo>           # Remove a tap
+skillshub tap update [owner/repo]           # Refresh tap registry
 ```
 
 ### Agent Management
@@ -180,23 +178,25 @@ Optional subdirectories:
 - `scripts/` - Executable scripts the agent can run
 - `references/` or `resources/` - Documentation loaded into context
 
-## Tap Registry Format
+## Tap Format
 
-Each tap repository should have a `registry.json` at the root:
+Any GitHub repository can be a tap. Skills are automatically discovered by scanning for folders containing a `SKILL.md` file anywhere in the repository. No `registry.json` or special configuration is required.
 
-```json
-{
-  "name": "my-tap",
-  "description": "Description of this tap",
-  "skills": {
-    "skill-name": {
-      "path": "skills/skill-name",
-      "description": "What this skill does",
-      "homepage": "https://example.com"
-    }
-  }
-}
+Example tap structure:
 ```
+my-tap-repo/
+├── skills/
+│   ├── skill-a/
+│   │   └── SKILL.md
+│   └── skill-b/
+│       └── SKILL.md
+├── other/path/
+│   └── another-skill/
+│       └── SKILL.md
+└── README.md
+```
+
+All three skills above would be discovered when adding this repo as a tap.
 
 ## Common Tasks
 
@@ -215,6 +215,6 @@ Each tap repository should have a `registry.json` at the root:
 ### Creating a third-party tap
 
 1. Create a GitHub repository
-2. Add `registry.json` with skill definitions
-3. Add skill folders matching the paths in registry.json
-4. Users can add with: `skillshub tap add https://github.com/user/repo`
+2. Add skill folders with `SKILL.md` files anywhere in the repo
+3. Users can add with: `skillshub tap add https://github.com/user/repo`
+4. Skills are automatically discovered by scanning for `SKILL.md` files

@@ -1,3 +1,4 @@
 /target
 .agents/
 .system/
+.envrc

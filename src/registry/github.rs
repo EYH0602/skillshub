@@ -8,9 +8,24 @@ use std::path::Path;
 use tar::Archive;
 
 use super::models::{GitHubUrl, SkillEntry, TapRegistry};
+use crate::skill::SkillMetadata;
 
 /// User agent for API requests
 const USER_AGENT: &str = "skillshub";
+
+/// GitHub Tree API response
+#[derive(Debug, Deserialize)]
+struct TreeResponse {
+    tree: Vec<TreeEntry>,
+}
+
+/// Entry in GitHub Tree API response
+#[derive(Debug, Deserialize)]
+struct TreeEntry {
+    path: String,
+    #[serde(rename = "type")]
+    entry_type: String,
+}
 
 /// Parse a GitHub URL into components
 ///
@@ -58,90 +73,108 @@ pub fn parse_github_url(url: &str) -> Result<GitHubUrl> {
     })
 }
 
-/// Fetch the registry.json from a tap repository
-pub fn fetch_tap_registry(github_url: &GitHubUrl, registry_path: &str) -> Result<TapRegistry> {
-    let raw_url = github_url.raw_url(registry_path);
-
+/// Discover skills from a GitHub repository by scanning for SKILL.md files
+///
+/// Uses the GitHub Tree API to recursively find all SKILL.md files in the repo,
+/// then fetches each one to extract metadata.
+pub fn discover_skills_from_repo(github_url: &GitHubUrl, tap_name: &str) -> Result<TapRegistry> {
     let client = reqwest::blocking::Client::builder().user_agent(USER_AGENT).build()?;
 
-    let response = client
-        .get(&raw_url)
-        .send()
-        .with_context(|| format!("Failed to fetch registry from {}", raw_url))?;
-
-    if !response.status().is_success() {
-        anyhow::bail!("Failed to fetch registry: HTTP {} from {}", response.status(), raw_url);
-    }
-
-    let registry: TapRegistry = response.json().with_context(|| "Failed to parse registry.json")?;
-
-    Ok(registry)
-}
-
-#[derive(Debug, Deserialize)]
-struct GitHubContentEntry {
-    name: String,
-    path: String,
-    #[serde(rename = "type")]
-    entry_type: String,
-}
-
-fn build_directory_registry(
-    tap_name: &str,
-    description: Option<String>,
-    entries: &[GitHubContentEntry],
-) -> TapRegistry {
-    let mut skills = HashMap::new();
-
-    for entry in entries.iter().filter(|entry| entry.entry_type == "dir") {
-        skills.insert(
-            entry.name.clone(),
-            SkillEntry {
-                path: entry.path.clone(),
-                description: None,
-                homepage: None,
-            },
-        );
-    }
-
-    TapRegistry {
-        name: tap_name.to_string(),
-        description,
-        skills,
-    }
-}
-
-/// Fetch a tap registry by listing a skills directory
-pub fn fetch_directory_registry(github_url: &GitHubUrl, tap_name: &str, skills_path: &str) -> Result<TapRegistry> {
-    let api_url = format!(
-        "{}/contents/{}?ref={}",
-        github_url.api_url(),
-        skills_path,
-        github_url.branch
-    );
-
-    let client = reqwest::blocking::Client::builder().user_agent(USER_AGENT).build()?;
+    // Fetch the full repo tree with recursive=1
+    let tree_url = format!("{}/git/trees/{}?recursive=1", github_url.api_url(), github_url.branch);
 
     let response = client
-        .get(&api_url)
+        .get(&tree_url)
         .send()
-        .with_context(|| format!("Failed to fetch skills from {}", api_url))?;
+        .with_context(|| format!("Failed to fetch repo tree from {}", tree_url))?;
 
     if !response.status().is_success() {
         anyhow::bail!(
-            "Failed to fetch skills directory: HTTP {} from {}",
+            "Failed to fetch repo tree: HTTP {} from {}",
             response.status(),
-            api_url
+            tree_url
         );
     }
 
-    let entries: Vec<GitHubContentEntry> = response
-        .json()
-        .with_context(|| "Failed to parse skills directory listing")?;
+    let tree_response: TreeResponse = response.json().with_context(|| "Failed to parse tree response")?;
 
-    let description = Some(format!("Default skills from {}/{}", github_url.owner, github_url.repo));
+    // Find all SKILL.md files
+    let skill_paths: Vec<String> = tree_response
+        .tree
+        .iter()
+        .filter(|entry| entry.entry_type == "blob" && entry.path.ends_with("/SKILL.md"))
+        .map(|entry| {
+            // Extract parent directory path: "skills/code-reviewer/SKILL.md" -> "skills/code-reviewer"
+            entry
+                .path
+                .rsplit_once('/')
+                .map(|(parent, _)| parent.to_string())
+                .unwrap_or_default()
+        })
+        .filter(|path| !path.is_empty())
+        .collect();
 
-    Ok(build_directory_registry(tap_name, description, &entries))
+    if skill_paths.is_empty() {
+        anyhow::bail!("No skills found in repository (no SKILL.md files detected)");
+    }
+
+    // Fetch metadata for each skill
+    let mut skills = HashMap::new();
+    for skill_path in &skill_paths {
+        let skill_md_url = github_url.raw_url(&format!("{}/SKILL.md", skill_path));
+
+        match client.get(&skill_md_url).send() {
+            Ok(resp) if resp.status().is_success() => {
+                if let Ok(content) = resp.text() {
+                    if let Some((name, description)) = parse_skill_md_content(&content) {
+                        skills.insert(
+                            name.clone(),
+                            SkillEntry {
+                                path: skill_path.clone(),
+                                description,
+                                homepage: None,
+                            },
+                        );
+                    }
+                }
+            }
+            _ => {
+                // If we can't fetch metadata, use directory name as skill name
+                if let Some(skill_name) = skill_path.rsplit('/').next() {
+                    skills.insert(
+                        skill_name.to_string(),
+                        SkillEntry {
+                            path: skill_path.clone(),
+                            description: None,
+                            homepage: None,
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    let description = Some(format!("Skills from {}/{}", github_url.owner, github_url.repo));
+
+    Ok(TapRegistry {
+        name: tap_name.to_string(),
+        description,
+        skills,
+    })
+}
+
+/// Parse SKILL.md content to extract name and description from YAML frontmatter
+fn parse_skill_md_content(content: &str) -> Option<(String, Option<String>)> {
+    // Extract YAML frontmatter between --- markers
+    let parts: Vec<&str> = content.splitn(3, "---").collect();
+    if parts.len() < 3 {
+        return None;
+    }
+
+    let yaml_content = parts[1].trim();
+    let metadata: SkillMetadata = serde_yaml::from_str(yaml_content).ok()?;
+
+    Some((metadata.name, metadata.description))
 }
 
 /// Get the latest commit SHA for a path in a repository
@@ -267,26 +300,40 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_build_directory_registry_filters_dirs() {
-        let entries = vec![
-            GitHubContentEntry {
-                name: "skill-one".to_string(),
-                path: "skills/skill-one".to_string(),
-                entry_type: "dir".to_string(),
-            },
-            GitHubContentEntry {
-                name: "README.md".to_string(),
-                path: "skills/README.md".to_string(),
-                entry_type: "file".to_string(),
-            },
-        ];
+    fn test_parse_skill_md_content() {
+        let content = r#"---
+name: test-skill
+description: A test skill
+---
+# Test Skill
+Some content here.
+"#;
+        let result = parse_skill_md_content(content);
+        assert!(result.is_some());
+        let (name, desc) = result.unwrap();
+        assert_eq!(name, "test-skill");
+        assert_eq!(desc, Some("A test skill".to_string()));
+    }
 
-        let registry = build_directory_registry("anthropics", None, &entries);
+    #[test]
+    fn test_parse_skill_md_content_no_description() {
+        let content = r#"---
+name: minimal-skill
+---
+# Minimal
+"#;
+        let result = parse_skill_md_content(content);
+        assert!(result.is_some());
+        let (name, desc) = result.unwrap();
+        assert_eq!(name, "minimal-skill");
+        assert!(desc.is_none());
+    }
 
-        assert_eq!(registry.name, "anthropics");
-        assert!(registry.skills.contains_key("skill-one"));
-        assert!(!registry.skills.contains_key("README.md"));
-        assert_eq!(registry.skills.get("skill-one").unwrap().path, "skills/skill-one");
+    #[test]
+    fn test_parse_skill_md_content_invalid() {
+        let content = "# No frontmatter here";
+        let result = parse_skill_md_content(content);
+        assert!(result.is_none());
     }
 
     #[test]
