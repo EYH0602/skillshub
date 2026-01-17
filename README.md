@@ -215,7 +215,7 @@ All skills are automatically discovered when users add your repo:
 
 ```bash
 skillshub tap add https://github.com/user/my-skills-repo
-skillshub install my-skills-repo/python-testing
+skillshub install user/my-skills-repo/python-testing
 ```
 
 ## Migration
