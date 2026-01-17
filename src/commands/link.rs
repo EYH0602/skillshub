@@ -3,7 +3,7 @@ use chrono::Utc;
 use colored::Colorize;
 use std::collections::HashSet;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::agent::{discover_agents, known_agent_names, AgentInfo};
 use crate::paths::get_skills_install_dir;
@@ -178,18 +178,22 @@ pub fn link_to_agents() -> Result<()> {
 
 /// Discover external skills from agent directories
 /// Returns (newly_discovered_names, all_external_skills)
+///
+/// External skills are real directories (not symlinks) in agent skill directories
+/// that weren't installed by skillshub. They are tracked and synced to other agents.
 fn discover_external_skills(
     agents: &[AgentInfo],
     db: &mut Database,
-    skillshub_skills_dir: &Path,
+    _skillshub_skills_dir: &Path,
 ) -> Result<(Vec<String>, Vec<ExternalSkill>)> {
     let mut new_external = Vec::new();
-    let mut seen_skills: HashSet<String> = HashSet::new();
+    // Track which canonical paths we've seen to avoid duplicates
+    let mut seen_sources: HashSet<PathBuf> = HashSet::new();
 
     // Collect names of skillshub-managed skills to exclude them
     let managed_skill_names: HashSet<String> = db.installed.values().map(|s| s.skill.clone()).collect();
 
-    // Process agents in order (Claude first due to KNOWN_AGENTS order)
+    // Scan all agents for external skills
     for agent in agents {
         let agent_name = agent
             .path
@@ -208,46 +212,33 @@ fn discover_external_skills(
             let path = entry.path();
             let skill_name = entry.file_name().to_string_lossy().to_string();
 
-            // Skip if already seen (another agent already owns this skill)
-            if seen_skills.contains(&skill_name) {
-                continue;
-            }
-
-            // Skip if it's a skillshub-managed skill
+            // Skip if it's a skillshub-managed skill name
             if managed_skill_names.contains(&skill_name) {
                 continue;
             }
 
-            // Skip if already tracked as external
-            if is_external_skill(db, &skill_name) {
-                seen_skills.insert(skill_name);
+            // Skip symlinks - we only track real directories as sources
+            // Symlinks are either skillshub-managed or created by us for syncing
+            if path.is_symlink() {
                 continue;
             }
 
-            // Check if this is a symlink pointing to skillshub's skills directory
-            if path.is_symlink() {
-                if let Ok(target) = fs::read_link(&path) {
-                    let target_canonical = target.canonicalize().unwrap_or(target);
-                    if target_canonical.starts_with(skillshub_skills_dir) {
-                        // This is a skillshub-managed symlink, skip
-                        continue;
-                    }
-                }
+            // Skip if not a directory
+            if !path.is_dir() {
+                continue;
             }
 
-            // This is an external skill - either a real directory or symlink to elsewhere
-            // Get the canonical path (resolve symlinks to find the real source)
-            let source_path = if path.is_symlink() {
-                fs::read_link(&path)
-                    .ok()
-                    .and_then(|p| p.canonicalize().ok())
-                    .unwrap_or_else(|| path.clone())
-            } else {
-                path.canonicalize().unwrap_or_else(|_| path.clone())
-            };
+            // Get canonical path to detect duplicates
+            let source_path = path.canonicalize().unwrap_or_else(|_| path.clone());
 
-            // Only track if it's a directory (skills are directories)
-            if !source_path.is_dir() {
+            // Skip if we've already seen this source path
+            if seen_sources.contains(&source_path) {
+                continue;
+            }
+            seen_sources.insert(source_path.clone());
+
+            // Skip if already tracked as external
+            if is_external_skill(db, &skill_name) {
                 continue;
             }
 
@@ -260,7 +251,6 @@ fn discover_external_skills(
 
             add_external_skill(db, &skill_name, external);
             new_external.push(skill_name.clone());
-            seen_skills.insert(skill_name);
         }
     }
 
