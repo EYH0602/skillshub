@@ -64,6 +64,10 @@ pub enum Commands {
     #[command(subcommand)]
     Tap(TapCommands),
 
+    /// Manage external skills (discovered from other sources)
+    #[command(subcommand)]
+    External(ExternalCommands),
+
     /// Migrate old-style installations to the new registry format
     Migrate,
 }
@@ -89,5 +93,20 @@ pub enum TapCommands {
     Update {
         /// Name of the tap to update, or omit to update all
         name: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum ExternalCommands {
+    /// List all discovered external skills
+    List,
+
+    /// Scan agent directories for external skills
+    Scan,
+
+    /// Stop tracking an external skill (does not delete the skill)
+    Forget {
+        /// Name of the external skill to forget
+        name: String,
     },
 }

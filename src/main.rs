@@ -9,8 +9,8 @@ mod util;
 use anyhow::Result;
 use clap::Parser;
 
-use cli::{Cli, Commands, TapCommands};
-use commands::{link_to_agents, show_agents};
+use cli::{Cli, Commands, ExternalCommands, TapCommands};
+use commands::{external_forget, external_list, external_scan, link_to_agents, show_agents};
 use registry::{
     add_skill_from_url, add_tap, install_all, install_skill, list_skills, list_taps, migrate_old_installations,
     needs_migration, remove_tap, search_skills, show_skill_info, uninstall_skill, update_skill, update_tap,
@@ -40,6 +40,11 @@ fn main() -> Result<()> {
             TapCommands::Remove { name } => remove_tap(&name)?,
             TapCommands::List => list_taps()?,
             TapCommands::Update { name } => update_tap(name.as_deref())?,
+        },
+        Commands::External(ext_cmd) => match ext_cmd {
+            ExternalCommands::List => external_list()?,
+            ExternalCommands::Scan => external_scan()?,
+            ExternalCommands::Forget { name } => external_forget(&name)?,
         },
         Commands::Migrate => migrate_old_installations()?,
     }

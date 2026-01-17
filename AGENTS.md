@@ -19,6 +19,7 @@ skillshub/
 │   ├── commands/               # Command implementations
 │   │   ├── mod.rs
 │   │   ├── agents.rs           # Show detected agents
+│   │   ├── external.rs         # External skills management
 │   │   └── link.rs             # Link skills to agents
 │   └── registry/               # Tap-based registry system
 │       ├── mod.rs
@@ -41,9 +42,10 @@ skillshub/
 
 - **Taps**: Git repositories containing skills (like Homebrew taps). Skills are auto-discovered by scanning for `SKILL.md` files.
 - **Skills**: Reusable instruction sets for AI coding agents, defined in `SKILL.md` files
-- **Database**: `~/.skillshub/db.json` tracks installed skills and their versions
+- **Database**: `~/.skillshub/db.json` tracks installed skills, their versions, and external skills
 - **Installation**: Skills are downloaded/copied to `~/.skillshub/skills/<tap>/<skill>/`
 - **Linking**: Per-skill symlinks are created from agent skill directories
+- **External Skills**: Skills installed through other means (marketplace, manual) are discovered and synced
 - **Agents**: Coding assistants like Claude, Codex, OpenCode, Aider, Cursor, Continue
 
 ## Data Flow
@@ -54,7 +56,15 @@ GitHub Tap Repository          Local Database           Installed Skills
 │ any/path/           │──────▶│ db.json      │◀──────▶│ ~/.skillshub/       │
 │   SKILL.md          │       │ - taps       │        │   skills/           │
 │   (auto-discovered) │       │ - installed  │        │     tap/skill/      │
-└─────────────────────┘       └──────────────┘        └─────────────────────┘
+└─────────────────────┘       │ - external   │        └─────────────────────┘
+                              └──────────────┘
+                                     ▲
+                                     │ discovers
+                              ┌──────┴──────┐
+                              │ Agent dirs  │
+                              │ (external   │
+                              │  skills)    │
+                              └─────────────┘
 ```
 
 ## Supported Agents
@@ -107,6 +117,15 @@ skillshub link                              # Link skills to detected agents
 skillshub agents                            # Show detected agents
 ```
 
+### External Skills Management
+```bash
+skillshub external list                     # List discovered external skills
+skillshub external scan                     # Scan for external skills
+skillshub external forget <name>            # Stop tracking an external skill
+```
+
+External skills are skills found in agent directories that weren't installed via skillshub (e.g., from Claude marketplace or manual installation). They are automatically discovered during `skillshub link` and synced to all other agents.
+
 ### Migration
 ```bash
 skillshub migrate                           # Migrate old-style installations
@@ -158,6 +177,8 @@ cargo run -- list
 cargo run -- install skillshub/code-reviewer
 cargo run -- link
 cargo run -- agents
+cargo run -- external list
+cargo run -- external scan
 ```
 
 ## Skill Format

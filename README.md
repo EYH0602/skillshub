@@ -124,6 +124,24 @@ skillshub link
 skillshub agents
 ```
 
+### External Skills Management
+
+Skillshub can discover and sync skills installed through other means (e.g., Claude marketplace, manual installation):
+
+```bash
+# List discovered external skills
+skillshub external list
+
+# Scan agent directories for external skills
+skillshub external scan
+
+# Stop tracking an external skill (doesn't delete it)
+skillshub external forget my-skill
+```
+
+When you run `skillshub link`, external skills are automatically discovered and synced to all other agents.
+The first agent where a skill is found becomes the "source of truth" (Claude is checked first).
+
 ## Supported Agents
 
 Skillshub automatically detects and links to these coding agents:
@@ -155,7 +173,8 @@ You can generate a token at https://github.com/settings/tokens (no special scope
 1. Skills are organized by source: `~/.skillshub/skills/<owner>/<repo>/<skill>/`
 2. A database at `~/.skillshub/db.json` tracks installed skills and their versions
 3. Running `skillshub link` creates per-skill symlinks in each agent's skills directory
-4. Re-run `skillshub link` any time to keep all agents synchronized
+4. External skills (from other sources) are discovered and synced to all agents
+5. Re-run `skillshub link` any time to keep all agents synchronized
 
 ## Skill Format
 
