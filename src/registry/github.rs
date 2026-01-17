@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use flate2::read::GzDecoder;
+use reqwest::blocking::{Client, RequestBuilder};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;
@@ -12,6 +13,23 @@ use crate::skill::SkillMetadata;
 
 /// User agent for API requests
 const USER_AGENT: &str = "skillshub";
+
+/// Build an HTTP client with GitHub token if available
+fn build_client() -> Result<Client> {
+    Client::builder()
+        .user_agent(USER_AGENT)
+        .build()
+        .context("Failed to build HTTP client")
+}
+
+/// Add GitHub token authentication to a request if GITHUB_TOKEN is set
+fn with_auth(request: RequestBuilder) -> RequestBuilder {
+    if let Ok(token) = std::env::var("GITHUB_TOKEN") {
+        request.bearer_auth(token)
+    } else {
+        request
+    }
+}
 
 /// GitHub Tree API response
 #[derive(Debug, Deserialize)]
@@ -77,14 +95,14 @@ pub fn parse_github_url(url: &str) -> Result<GitHubUrl> {
 ///
 /// Uses the GitHub Tree API to recursively find all SKILL.md files in the repo,
 /// then fetches each one to extract metadata.
+/// Set GITHUB_TOKEN environment variable to avoid rate limiting.
 pub fn discover_skills_from_repo(github_url: &GitHubUrl, tap_name: &str) -> Result<TapRegistry> {
-    let client = reqwest::blocking::Client::builder().user_agent(USER_AGENT).build()?;
+    let client = build_client()?;
 
     // Fetch the full repo tree with recursive=1
     let tree_url = format!("{}/git/trees/{}?recursive=1", github_url.api_url(), github_url.branch);
 
-    let response = client
-        .get(&tree_url)
+    let response = with_auth(client.get(&tree_url))
         .send()
         .with_context(|| format!("Failed to fetch repo tree from {}", tree_url))?;
 
@@ -123,7 +141,8 @@ pub fn discover_skills_from_repo(github_url: &GitHubUrl, tap_name: &str) -> Resu
     for skill_path in &skill_paths {
         let skill_md_url = github_url.raw_url(&format!("{}/SKILL.md", skill_path));
 
-        match client.get(&skill_md_url).send() {
+        // Note: raw.githubusercontent.com doesn't need auth, but we add it anyway
+        match with_auth(client.get(&skill_md_url)).send() {
             Ok(resp) if resp.status().is_success() => {
                 if let Ok(content) = resp.text() {
                     if let Some((name, description)) = parse_skill_md_content(&content) {
@@ -179,7 +198,7 @@ fn parse_skill_md_content(content: &str) -> Option<(String, Option<String>)> {
 
 /// Get the latest commit SHA for a path in a repository
 pub fn get_latest_commit(github_url: &GitHubUrl, path: Option<&str>) -> Result<String> {
-    let client = reqwest::blocking::Client::builder().user_agent(USER_AGENT).build()?;
+    let client = build_client()?;
 
     let mut url = format!("{}/commits?sha={}&per_page=1", github_url.api_url(), github_url.branch);
 
@@ -187,8 +206,7 @@ pub fn get_latest_commit(github_url: &GitHubUrl, path: Option<&str>) -> Result<S
         url.push_str(&format!("&path={}", p));
     }
 
-    let response = client
-        .get(&url)
+    let response = with_auth(client.get(&url))
         .send()
         .with_context(|| format!("Failed to fetch commits from {}", url))?;
 
@@ -211,12 +229,11 @@ pub fn get_latest_commit(github_url: &GitHubUrl, path: Option<&str>) -> Result<S
 pub fn download_skill(github_url: &GitHubUrl, skill_path: &str, dest: &Path, commit: Option<&str>) -> Result<String> {
     let git_ref = commit.unwrap_or(&github_url.branch);
 
-    let client = reqwest::blocking::Client::builder().user_agent(USER_AGENT).build()?;
+    let client = build_client()?;
 
     // Download tarball
     let tarball_url = github_url.tarball_url(git_ref);
-    let response = client
-        .get(&tarball_url)
+    let response = with_auth(client.get(&tarball_url))
         .send()
         .with_context(|| format!("Failed to download from {}", tarball_url))?;
 
