@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use std::fs;
 use std::path::PathBuf;
 
-use super::models::{Database, InstalledSkill, TapInfo};
+use super::models::{Database, ExternalSkill, InstalledSkill, TapInfo};
 use crate::paths::get_skillshub_home;
 
 /// Default tap name for bundled skills (owner/repo format)
@@ -123,6 +123,32 @@ pub fn remove_tap(db: &mut Database, name: &str) -> Option<TapInfo> {
 /// Get all skills installed from a specific tap
 pub fn get_skills_from_tap<'a>(db: &'a Database, tap_name: &str) -> Vec<(&'a String, &'a InstalledSkill)> {
     db.installed.iter().filter(|(_, skill)| skill.tap == tap_name).collect()
+}
+
+/// Check if a skill is tracked as external
+pub fn is_external_skill(db: &Database, name: &str) -> bool {
+    db.external.contains_key(name)
+}
+
+/// Get external skill info
+#[allow(dead_code)]
+pub fn get_external_skill<'a>(db: &'a Database, name: &str) -> Option<&'a ExternalSkill> {
+    db.external.get(name)
+}
+
+/// Add an external skill to the database
+pub fn add_external_skill(db: &mut Database, name: &str, skill: ExternalSkill) {
+    db.external.insert(name.to_string(), skill);
+}
+
+/// Remove an external skill from the database
+pub fn remove_external_skill(db: &mut Database, name: &str) -> Option<ExternalSkill> {
+    db.external.remove(name)
+}
+
+/// Get all external skills
+pub fn get_all_external_skills(db: &Database) -> Vec<(&String, &ExternalSkill)> {
+    db.external.iter().collect()
 }
 
 #[cfg(test)]
@@ -256,5 +282,32 @@ mod tests {
 
         let tap2_skills = get_skills_from_tap(&db, "tap2");
         assert_eq!(tap2_skills.len(), 1);
+    }
+
+    #[test]
+    fn test_external_skill_operations() {
+        let mut db = Database::default();
+        assert!(!is_external_skill(&db, "my-external-skill"));
+
+        let external = ExternalSkill {
+            name: "my-external-skill".to_string(),
+            source_agent: ".claude".to_string(),
+            source_path: PathBuf::from("/home/user/.claude/skills/my-external-skill"),
+            discovered_at: Utc::now(),
+        };
+
+        add_external_skill(&mut db, "my-external-skill", external);
+        assert!(is_external_skill(&db, "my-external-skill"));
+
+        let retrieved = get_external_skill(&db, "my-external-skill");
+        assert!(retrieved.is_some());
+        assert_eq!(retrieved.unwrap().source_agent, ".claude");
+
+        let all_external = get_all_external_skills(&db);
+        assert_eq!(all_external.len(), 1);
+
+        let removed = remove_external_skill(&mut db, "my-external-skill");
+        assert!(removed.is_some());
+        assert!(!is_external_skill(&db, "my-external-skill"));
     }
 }

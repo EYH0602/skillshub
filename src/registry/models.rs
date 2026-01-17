@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 /// The main database stored at ~/.skillshub/db.json
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -12,6 +13,11 @@ pub struct Database {
     /// Installed skills (full name "tap/skill" -> installation info)
     #[serde(default)]
     pub installed: HashMap<String, InstalledSkill>,
+
+    /// External skills (skill name -> external skill info)
+    /// These are skills found in agent directories that weren't installed via skillshub
+    #[serde(default)]
+    pub external: HashMap<String, ExternalSkill>,
 }
 
 /// Information about a configured tap
@@ -61,6 +67,24 @@ pub struct InstalledSkill {
     /// Path within the repository where this skill lives
     #[serde(default)]
     pub source_path: Option<String>,
+}
+
+/// Information about an externally-managed skill (not installed via skillshub)
+/// These are skills found in agent directories that are managed elsewhere
+/// (e.g., Claude marketplace, manual installation)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExternalSkill {
+    /// The skill name (directory name)
+    pub name: String,
+
+    /// The agent that owns/manages this skill (e.g., ".claude")
+    pub source_agent: String,
+
+    /// Full path to the skill directory
+    pub source_path: PathBuf,
+
+    /// When this skill was discovered
+    pub discovered_at: DateTime<Utc>,
 }
 
 /// Registry format for remote taps (registry.json in tap repo)
@@ -284,6 +308,7 @@ mod tests {
         let db = Database::default();
         assert!(db.taps.is_empty());
         assert!(db.installed.is_empty());
+        assert!(db.external.is_empty());
     }
 
     #[test]
