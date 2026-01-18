@@ -27,7 +27,7 @@ pub struct TapRow {
 }
 
 /// Add a new tap from a GitHub URL
-pub fn add_tap(url: &str) -> Result<()> {
+pub fn add_tap(url: &str, install: bool) -> Result<()> {
     let github_url = parse_github_url(url)?;
     let tap_name = github_url.tap_name();
 
@@ -69,8 +69,8 @@ pub fn add_tap(url: &str) -> Result<()> {
         registry.skills.len()
     );
 
-    // Show available skills
-    if !registry.skills.is_empty() {
+    // Show available skills (only if not installing)
+    if !install && !registry.skills.is_empty() {
         println!("\n  Available skills:");
         for (name, entry) in registry.skills.iter().take(10) {
             let desc = entry.description.as_deref().unwrap_or("No description");
@@ -79,6 +79,12 @@ pub fn add_tap(url: &str) -> Result<()> {
         if registry.skills.len() > 10 {
             println!("    {} ... and {} more", "•".cyan(), registry.skills.len() - 10);
         }
+    }
+
+    // Install all skills if requested
+    if install && !registry.skills.is_empty() {
+        println!();
+        super::skill::install_all_from_tap(&tap_name)?;
     }
 
     Ok(())

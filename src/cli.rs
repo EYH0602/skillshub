@@ -78,6 +78,10 @@ pub enum TapCommands {
     Add {
         /// GitHub repository URL (e.g., https://github.com/user/skillshub-tap)
         url: String,
+
+        /// Install all skills from the tap after adding
+        #[arg(short, long)]
+        install: bool,
     },
 
     /// Remove a tap

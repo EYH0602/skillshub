@@ -37,7 +37,7 @@ fn main() -> Result<()> {
         Commands::Link => link_to_agents()?,
         Commands::Agents => show_agents()?,
         Commands::Tap(tap_cmd) => match tap_cmd {
-            TapCommands::Add { url } => add_tap(&url)?,
+            TapCommands::Add { url, install } => add_tap(&url, install)?,
             TapCommands::Remove { name } => remove_tap(&name)?,
             TapCommands::List => list_taps()?,
             TapCommands::Update { name } => update_tap(name.as_deref())?,

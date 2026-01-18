@@ -106,6 +106,9 @@ skillshub tap list
 skillshub tap add https://github.com/anthropics/skills
 skillshub tap add https://github.com/vercel-labs/agent-skills
 
+# Add a tap and install all its skills in one command
+skillshub tap add https://github.com/anthropics/skills --install
+
 # Update tap registries (re-discover skills)
 skillshub tap update                        # Update all taps
 skillshub tap update anthropics/skills      # Update specific tap
