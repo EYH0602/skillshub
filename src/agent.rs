@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 use tabled::Tabled;
 
+use crate::paths::get_home_dir;
+
 /// Agent configuration: (agent_dir, skills_subdir)
 pub const KNOWN_AGENTS: &[(&str, &str)] = &[
     (".claude", "skills"),
@@ -34,7 +36,7 @@ pub struct AgentRow {
 pub fn discover_agents() -> Vec<AgentInfo> {
     let mut agents = Vec::new();
 
-    if let Some(home) = dirs::home_dir() {
+    if let Some(home) = get_home_dir() {
         for (agent_dir, skills_subdir) in KNOWN_AGENTS {
             let agent_path = home.join(agent_dir);
             if agent_path.exists() && agent_path.is_dir() {

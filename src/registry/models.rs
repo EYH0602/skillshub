@@ -141,6 +141,16 @@ pub struct GitHubUrl {
 }
 
 impl GitHubUrl {
+    /// Get GitHub API base URL - supports test override via SKILLSHUB_GITHUB_API_BASE env var
+    fn github_api_base() -> String {
+        std::env::var("SKILLSHUB_GITHUB_API_BASE").unwrap_or_else(|_| "https://api.github.com".to_string())
+    }
+
+    /// Get GitHub raw content base URL - supports test override via SKILLSHUB_GITHUB_RAW_BASE env var
+    fn github_raw_base() -> String {
+        std::env::var("SKILLSHUB_GITHUB_RAW_BASE").unwrap_or_else(|_| "https://raw.githubusercontent.com".to_string())
+    }
+
     /// Check if the branch looks like a commit SHA (40 hex chars or 7+ hex prefix)
     pub fn is_commit_sha(&self) -> bool {
         let b = &self.branch;
@@ -167,22 +177,29 @@ impl GitHubUrl {
 
     /// Get the API URL for the repository
     pub fn api_url(&self) -> String {
-        format!("https://api.github.com/repos/{}/{}", self.owner, self.repo)
+        format!("{}/repos/{}/{}", Self::github_api_base(), self.owner, self.repo)
     }
 
     /// Get the tarball URL for downloading
     pub fn tarball_url(&self, git_ref: &str) -> String {
         format!(
-            "https://api.github.com/repos/{}/{}/tarball/{}",
-            self.owner, self.repo, git_ref
+            "{}/repos/{}/{}/tarball/{}",
+            Self::github_api_base(),
+            self.owner,
+            self.repo,
+            git_ref
         )
     }
 
     /// Get the raw content URL for a file
     pub fn raw_url(&self, path: &str) -> String {
         format!(
-            "https://raw.githubusercontent.com/{}/{}/{}/{}",
-            self.owner, self.repo, self.branch, path
+            "{}/{}/{}/{}/{}",
+            Self::github_raw_base(),
+            self.owner,
+            self.repo,
+            self.branch,
+            path
         )
     }
 }

@@ -1,9 +1,17 @@
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
+/// Get home directory - supports test override via SKILLSHUB_TEST_HOME env var
+pub fn get_home_dir() -> Option<PathBuf> {
+    std::env::var("SKILLSHUB_TEST_HOME")
+        .ok()
+        .map(PathBuf::from)
+        .or_else(dirs::home_dir)
+}
+
 /// Get the skillshub home directory (~/.skillshub)
 pub fn get_skillshub_home() -> Result<PathBuf> {
-    let home = dirs::home_dir().context("Could not determine home directory")?;
+    let home = get_home_dir().context("Could not determine home directory")?;
     Ok(home.join(".skillshub"))
 }
 
@@ -66,7 +74,7 @@ pub fn get_embedded_skills_dir() -> Result<PathBuf> {
 
 /// Display a path with ~ substituted for home directory
 pub fn display_path_with_tilde(path: &Path) -> String {
-    if let Some(home) = dirs::home_dir() {
+    if let Some(home) = get_home_dir() {
         if let Ok(stripped) = path.strip_prefix(&home) {
             return format!("~/{}", stripped.display());
         }
@@ -77,6 +85,23 @@ pub fn display_path_with_tilde(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_get_home_dir_uses_env_override() {
+        // Save original value
+        let original = std::env::var("SKILLSHUB_TEST_HOME").ok();
+
+        // Set test override
+        std::env::set_var("SKILLSHUB_TEST_HOME", "/test/home");
+        let home = get_home_dir().unwrap();
+        assert_eq!(home, PathBuf::from("/test/home"));
+
+        // Restore original value
+        match original {
+            Some(val) => std::env::set_var("SKILLSHUB_TEST_HOME", val),
+            None => std::env::remove_var("SKILLSHUB_TEST_HOME"),
+        }
+    }
 
     #[test]
     fn test_get_skillshub_home() {
