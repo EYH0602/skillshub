@@ -106,8 +106,9 @@ The default tap is `EYH0602/skillshub` (bundled). Add third-party taps like `ant
 ```bash
 skillshub tap list                          # List configured taps
 # Skills column shows installed/available counts (e.g., 2/15 or 1/?)
-skillshub tap add <github-url>              # Add a third-party tap
-skillshub tap add <github-url> --install    # Add tap and install all skills
+skillshub tap add <owner/repo>              # Add a tap (defaults to GitHub)
+skillshub tap add <github-url>              # Add a tap with full URL
+skillshub tap add <owner/repo> --install    # Add tap and install all skills
 skillshub tap remove <owner/repo>           # Remove a tap
 skillshub tap update [owner/repo]           # Refresh tap registry
 skillshub tap install-all <owner/repo>      # Install all skills from a tap
@@ -240,5 +241,5 @@ All three skills above would be discovered when adding this repo as a tap.
 
 1. Create a GitHub repository
 2. Add skill folders with `SKILL.md` files anywhere in the repo
-3. Users can add with: `skillshub tap add https://github.com/user/repo`
+3. Users can add with: `skillshub tap add user/repo`
 4. Skills are automatically discovered by scanning for `SKILL.md` files

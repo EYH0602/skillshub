@@ -74,9 +74,9 @@ pub enum Commands {
 
 #[derive(Subcommand)]
 pub enum TapCommands {
-    /// Add a new tap from a GitHub URL
+    /// Add a new tap from a GitHub repository
     Add {
-        /// GitHub repository URL (e.g., https://github.com/user/skillshub-tap)
+        /// Repository ID or URL (e.g., owner/repo or https://github.com/owner/repo)
         url: String,
 
         /// Install all skills from the tap after adding
