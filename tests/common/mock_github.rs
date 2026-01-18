@@ -3,6 +3,8 @@
 //! Uses wiremock to provide a fake GitHub API that can return
 //! controlled responses for skill discovery and download operations.
 
+#![allow(dead_code)]
+
 use serde_json::json;
 use wiremock::matchers::{method, path, path_regex};
 use wiremock::{Mock, MockServer, ResponseTemplate};

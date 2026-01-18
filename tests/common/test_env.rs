@@ -3,8 +3,10 @@
 //! Provides isolated filesystem environments for testing skillshub operations
 //! without affecting the user's real ~/.skillshub directory.
 
+#![allow(dead_code)]
+
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
 /// Test environment that provides isolated directories for testing
@@ -111,7 +113,7 @@ impl TestEnv {
     /// Create an external skill directly in an agent's skills directory
     ///
     /// This simulates a skill installed via marketplace or manual copy.
-    pub fn create_external_skill(&self, agent_skills_path: &PathBuf, skill_name: &str, content: &str) -> PathBuf {
+    pub fn create_external_skill(&self, agent_skills_path: &Path, skill_name: &str, content: &str) -> PathBuf {
         let skill_dir = agent_skills_path.join(skill_name);
         fs::create_dir_all(&skill_dir).unwrap();
         fs::write(skill_dir.join("SKILL.md"), content).unwrap();
@@ -134,14 +136,14 @@ impl TestEnv {
     }
 
     /// Check if a path is a symlink
-    pub fn is_symlink(&self, path: &PathBuf) -> bool {
+    pub fn is_symlink(&self, path: &Path) -> bool {
         path.symlink_metadata()
             .map(|m| m.file_type().is_symlink())
             .unwrap_or(false)
     }
 
     /// Get the symlink target
-    pub fn read_link(&self, path: &PathBuf) -> Option<PathBuf> {
+    pub fn read_link(&self, path: &Path) -> Option<PathBuf> {
         fs::read_link(path).ok()
     }
 }

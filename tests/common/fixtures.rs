@@ -1,8 +1,9 @@
 //! Test fixtures and data generators for integration tests
 
+#![allow(dead_code)]
+
 use flate2::write::GzEncoder;
 use flate2::Compression;
-use std::io::Write;
 use tar::Builder;
 
 /// Create a valid SKILL.md content with frontmatter
