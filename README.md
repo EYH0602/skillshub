@@ -110,6 +110,9 @@ skillshub tap add https://github.com/vercel-labs/agent-skills
 skillshub tap update                        # Update all taps
 skillshub tap update anthropics/skills      # Update specific tap
 
+# Install all skills from a specific tap
+skillshub tap install-all anthropics/skills
+
 # Remove a tap
 skillshub tap remove vercel-labs/agent-skills
 ```

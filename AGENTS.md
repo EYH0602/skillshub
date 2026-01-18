@@ -109,6 +109,7 @@ skillshub tap list                          # List configured taps
 skillshub tap add <github-url>              # Add a third-party tap
 skillshub tap remove <owner/repo>           # Remove a tap
 skillshub tap update [owner/repo]           # Refresh tap registry
+skillshub tap install-all <owner/repo>      # Install all skills from a tap
 ```
 
 ### Agent Management

@@ -710,42 +710,7 @@ pub fn install_all() -> Result<()> {
     let mut installed_count = 0;
 
     for tap_name in default_taps {
-        let registry = match get_tap_registry(&db, &tap_name) {
-            Ok(r) => r,
-            Err(e) => {
-                println!("  {} {} ({})", "✗".red(), tap_name, e);
-                continue;
-            }
-        };
-
-        if registry.skills.is_empty() {
-            println!("No skills available in default tap '{}'.", tap_name);
-            continue;
-        }
-
-        println!(
-            "{} Installing {} skills from '{}'",
-            "=>".green().bold(),
-            registry.skills.len(),
-            tap_name
-        );
-
-        for skill_name in registry.skills.keys() {
-            let full_name = format!("{}/{}", tap_name, skill_name);
-
-            if db::is_skill_installed(&db, &full_name) {
-                println!("  {} {} (already installed)", "○".yellow(), full_name);
-                continue;
-            }
-
-            match install_skill_internal(&full_name) {
-                Ok(true) => installed_count += 1,
-                Ok(false) => {}
-                Err(e) => {
-                    println!("  {} {} ({})", "✗".red(), full_name, e);
-                }
-            }
-        }
+        installed_count += install_all_from_tap_internal(&db, &tap_name)?;
     }
 
     println!("\n{} Installed {} skills", "Done!".green().bold(), installed_count);
@@ -756,4 +721,64 @@ pub fn install_all() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Install all skills from a specific tap
+pub fn install_all_from_tap(tap_name: &str) -> Result<()> {
+    let db = db::init_db()?;
+
+    // Verify tap exists
+    if db::get_tap(&db, tap_name).is_none() {
+        anyhow::bail!("Tap '{}' not found. Add it with 'skillshub tap add <url>'", tap_name);
+    }
+
+    let installed_count = install_all_from_tap_internal(&db, tap_name)?;
+
+    println!("\n{} Installed {} skills", "Done!".green().bold(), installed_count);
+
+    // Auto-link to all agents (once after all installations)
+    if installed_count > 0 {
+        link_to_agents()?;
+    }
+
+    Ok(())
+}
+
+/// Internal helper to install all skills from a tap (used by both install_all and install_all_from_tap)
+fn install_all_from_tap_internal(db: &super::models::Database, tap_name: &str) -> Result<usize> {
+    let registry =
+        get_tap_registry(db, tap_name).with_context(|| format!("Failed to get registry for tap '{}'", tap_name))?;
+
+    if registry.skills.is_empty() {
+        println!("No skills available in tap '{}'.", tap_name);
+        return Ok(0);
+    }
+
+    println!(
+        "{} Installing {} skills from '{}'",
+        "=>".green().bold(),
+        registry.skills.len(),
+        tap_name
+    );
+
+    let mut installed_count = 0;
+
+    for skill_name in registry.skills.keys() {
+        let full_name = format!("{}/{}", tap_name, skill_name);
+
+        if db::is_skill_installed(db, &full_name) {
+            println!("  {} {} (already installed)", "○".yellow(), full_name);
+            continue;
+        }
+
+        match install_skill_internal(&full_name) {
+            Ok(true) => installed_count += 1,
+            Ok(false) => {}
+            Err(e) => {
+                println!("  {} {} ({})", "✗".red(), full_name, e);
+            }
+        }
+    }
+
+    Ok(installed_count)
 }

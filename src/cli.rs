@@ -94,6 +94,12 @@ pub enum TapCommands {
         /// Name of the tap to update, or omit to update all
         name: Option<String>,
     },
+
+    /// Install all skills from a specific tap
+    InstallAll {
+        /// Name of the tap to install from (e.g., EYH0602/skillshub)
+        name: String,
+    },
 }
 
 #[derive(Subcommand)]
