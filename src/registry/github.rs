@@ -45,26 +45,45 @@ struct TreeEntry {
     entry_type: String,
 }
 
-/// Parse a GitHub URL into components
+/// Parse a GitHub URL or repository identifier into components
 ///
 /// Supports formats:
+/// - owner/repo (short format, defaults to GitHub)
 /// - https://github.com/owner/repo
 /// - https://github.com/owner/repo/tree/branch
 /// - https://github.com/owner/repo/tree/branch/path/to/folder
 pub fn parse_github_url(url: &str) -> Result<GitHubUrl> {
     let url = url.trim_end_matches('/');
 
-    // Remove protocol prefix
+    // Try to strip protocol prefixes
     let path = url
         .strip_prefix("https://github.com/")
         .or_else(|| url.strip_prefix("http://github.com/"))
-        .or_else(|| url.strip_prefix("github.com/"))
-        .with_context(|| format!("Invalid GitHub URL: {}", url))?;
+        .or_else(|| url.strip_prefix("github.com/"));
+
+    // If no prefix was stripped, check if it's a valid owner/repo format
+    let path = match path {
+        Some(p) => p,
+        None => {
+            // Check if it looks like owner/repo (no protocol, no dots in the first segment)
+            if is_valid_repo_id(url) {
+                url
+            } else {
+                anyhow::bail!(
+                    "Invalid GitHub URL or repository ID: {}\n\
+                     Expected formats:\n\
+                     - owner/repo\n\
+                     - https://github.com/owner/repo",
+                    url
+                );
+            }
+        }
+    };
 
     let parts: Vec<&str> = path.split('/').collect();
 
     if parts.len() < 2 {
-        anyhow::bail!("Invalid GitHub URL: must include owner/repo");
+        anyhow::bail!("Invalid repository ID: must be in 'owner/repo' format");
     }
 
     let owner = parts[0].to_string();
@@ -91,6 +110,39 @@ pub fn parse_github_url(url: &str) -> Result<GitHubUrl> {
     })
 }
 
+/// Check if a string looks like a valid owner/repo identifier
+/// Valid: "owner/repo", "my-org/my-repo", "user123/repo_name"
+/// Invalid: "https://...", "gitlab.com/...", "just-one-part"
+fn is_valid_repo_id(s: &str) -> bool {
+    let parts: Vec<&str> = s.split('/').collect();
+
+    // Must have exactly 2 parts for owner/repo
+    if parts.len() != 2 {
+        return false;
+    }
+
+    let owner = parts[0];
+    let repo = parts[1];
+
+    // Both parts must be non-empty
+    if owner.is_empty() || repo.is_empty() {
+        return false;
+    }
+
+    // Owner and repo should only contain valid GitHub username/repo characters
+    // GitHub allows alphanumeric, hyphens, underscores, and dots
+    let is_valid_part = |part: &str| {
+        !part.is_empty()
+            && part
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
+            && !part.starts_with('-')
+            && !part.starts_with('.')
+    };
+
+    is_valid_part(owner) && is_valid_part(repo)
+}
+
 /// Discover skills from a GitHub repository by scanning for SKILL.md files
 ///
 /// Uses the GitHub Tree API to recursively find all SKILL.md files in the repo,
@@ -107,11 +159,18 @@ pub fn discover_skills_from_repo(github_url: &GitHubUrl, tap_name: &str) -> Resu
         .with_context(|| format!("Failed to fetch repo tree from {}", tree_url))?;
 
     if !response.status().is_success() {
-        anyhow::bail!(
-            "Failed to fetch repo tree: HTTP {} from {}",
-            response.status(),
-            tree_url
-        );
+        let status = response.status();
+        if status == reqwest::StatusCode::NOT_FOUND {
+            anyhow::bail!(
+                "Repository not found on GitHub: {}/{}\n\
+                 Please check that:\n\
+                 - The repository exists and is spelled correctly\n\
+                 - The repository is public (or GITHUB_TOKEN is set for private repos)",
+                github_url.owner,
+                github_url.repo
+            );
+        }
+        anyhow::bail!("Failed to fetch repo tree: HTTP {} from {}", status, tree_url);
     }
 
     let tree_response: TreeResponse = response.json().with_context(|| "Failed to parse tree response")?;
@@ -399,5 +458,59 @@ name: minimal-skill
         assert!(parse_github_url("https://gitlab.com/owner/repo").is_err());
         assert!(parse_github_url("https://github.com/owner").is_err());
         assert!(parse_github_url("not-a-url").is_err());
+    }
+
+    #[test]
+    fn test_parse_github_url_repo_id_simple() {
+        let url = parse_github_url("owner/repo").unwrap();
+        assert_eq!(url.owner, "owner");
+        assert_eq!(url.repo, "repo");
+        assert_eq!(url.branch, "main");
+        assert!(url.path.is_none());
+    }
+
+    #[test]
+    fn test_parse_github_url_repo_id_with_hyphens() {
+        let url = parse_github_url("my-org/my-repo").unwrap();
+        assert_eq!(url.owner, "my-org");
+        assert_eq!(url.repo, "my-repo");
+    }
+
+    #[test]
+    fn test_parse_github_url_repo_id_with_underscores() {
+        let url = parse_github_url("user_name/repo_name").unwrap();
+        assert_eq!(url.owner, "user_name");
+        assert_eq!(url.repo, "repo_name");
+    }
+
+    #[test]
+    fn test_parse_github_url_repo_id_with_dots() {
+        let url = parse_github_url("owner/repo.js").unwrap();
+        assert_eq!(url.owner, "owner");
+        assert_eq!(url.repo, "repo.js");
+    }
+
+    #[test]
+    fn test_is_valid_repo_id() {
+        assert!(is_valid_repo_id("owner/repo"));
+        assert!(is_valid_repo_id("my-org/my-repo"));
+        assert!(is_valid_repo_id("user123/repo_name"));
+        assert!(is_valid_repo_id("Owner/Repo.js"));
+    }
+
+    #[test]
+    fn test_is_valid_repo_id_invalid() {
+        // Not enough parts
+        assert!(!is_valid_repo_id("just-one-part"));
+        // Too many parts
+        assert!(!is_valid_repo_id("owner/repo/extra"));
+        // Empty parts
+        assert!(!is_valid_repo_id("/repo"));
+        assert!(!is_valid_repo_id("owner/"));
+        // Starts with invalid char
+        assert!(!is_valid_repo_id("-owner/repo"));
+        assert!(!is_valid_repo_id(".owner/repo"));
+        // Invalid characters
+        assert!(!is_valid_repo_id("owner/repo name"));
     }
 }

@@ -35,10 +35,10 @@ cargo install --path .
 skillshub install EYH0602/skillshub/code-reviewer
 
 # Or add third-party taps and install from them
-skillshub tap add https://github.com/anthropics/skills
+skillshub tap add anthropics/skills
 skillshub install anthropics/skills/frontend-design
 
-skillshub tap add https://github.com/vercel-labs/agent-skills
+skillshub tap add vercel-labs/agent-skills
 skillshub install vercel-labs/agent-skills/vercel-deploy
 
 # Link installed skills to every detected agent
@@ -103,11 +103,14 @@ skillshub tap list
 # Skills column shows installed/available counts (e.g., 2/15 or 1/?)
 
 # Add third-party taps (any GitHub repo with SKILL.md files)
-skillshub tap add https://github.com/anthropics/skills
-skillshub tap add https://github.com/vercel-labs/agent-skills
+skillshub tap add anthropics/skills
+skillshub tap add vercel-labs/agent-skills
+
+# Full URLs also work
+skillshub tap add https://github.com/some-org/some-skills
 
 # Add a tap and install all its skills in one command
-skillshub tap add https://github.com/anthropics/skills --install
+skillshub tap add anthropics/skills --install
 
 # Update tap registries (re-discover skills)
 skillshub tap update                        # Update all taps
@@ -168,7 +171,7 @@ To avoid rate limiting, set a GitHub personal access token:
 
 ```bash
 export GITHUB_TOKEN=your_token_here
-skillshub tap add https://github.com/anthropics/skills
+skillshub tap add anthropics/skills
 ```
 
 You can generate a token at https://github.com/settings/tokens (no special scopes needed for public repos).
@@ -220,7 +223,7 @@ my-skills-repo/
 All skills are automatically discovered when users add your repo:
 
 ```bash
-skillshub tap add https://github.com/user/my-skills-repo
+skillshub tap add user/my-skills-repo
 skillshub install user/my-skills-repo/python-testing
 ```
 
