@@ -57,6 +57,7 @@ fn default_taps() -> Vec<(&'static str, TapInfo)> {
             updated_at: None,
             is_default: true,
             is_bundled: true,
+            cached_registry: None, // Bundled taps don't need cache (generated from local files)
         },
     )]
 }
@@ -231,6 +232,7 @@ mod tests {
             updated_at: None,
             is_default: false,
             is_bundled: false,
+            cached_registry: None,
         };
 
         add_tap(&mut db, "my-tap", tap);

@@ -106,9 +106,15 @@ skillshub tap list
 skillshub tap add https://github.com/anthropics/skills
 skillshub tap add https://github.com/vercel-labs/agent-skills
 
+# Add a tap and install all its skills in one command
+skillshub tap add https://github.com/anthropics/skills --install
+
 # Update tap registries (re-discover skills)
 skillshub tap update                        # Update all taps
 skillshub tap update anthropics/skills      # Update specific tap
+
+# Install all skills from a specific tap
+skillshub tap install-all anthropics/skills
 
 # Remove a tap
 skillshub tap remove vercel-labs/agent-skills
@@ -215,7 +221,7 @@ All skills are automatically discovered when users add your repo:
 
 ```bash
 skillshub tap add https://github.com/user/my-skills-repo
-skillshub install my-skills-repo/python-testing
+skillshub install user/my-skills-repo/python-testing
 ```
 
 ## Migration

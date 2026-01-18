@@ -15,9 +15,9 @@ pub enum Commands {
     /// Install all skills from default taps
     InstallAll,
 
-    /// Install a skill (format: tap/skill[@commit])
+    /// Install a skill (format: owner/repo/skill[@commit])
     Install {
-        /// Full skill name (e.g., skillshub/code-reviewer)
+        /// Full skill name (e.g., EYH0602/skillshub/code-reviewer)
         name: String,
     },
 
@@ -27,9 +27,9 @@ pub enum Commands {
         url: String,
     },
 
-    /// Uninstall a skill (format: tap/skill)
+    /// Uninstall a skill (format: owner/repo/skill)
     Uninstall {
-        /// Full skill name (e.g., skillshub/code-reviewer)
+        /// Full skill name (e.g., EYH0602/skillshub/code-reviewer)
         name: String,
     },
 
@@ -50,7 +50,7 @@ pub enum Commands {
 
     /// Show detailed information about a skill
     Info {
-        /// Full skill name (e.g., skillshub/code-reviewer)
+        /// Full skill name (e.g., EYH0602/skillshub/code-reviewer)
         name: String,
     },
 
@@ -78,6 +78,10 @@ pub enum TapCommands {
     Add {
         /// GitHub repository URL (e.g., https://github.com/user/skillshub-tap)
         url: String,
+
+        /// Install all skills from the tap after adding
+        #[arg(short, long)]
+        install: bool,
     },
 
     /// Remove a tap
@@ -93,6 +97,12 @@ pub enum TapCommands {
     Update {
         /// Name of the tap to update, or omit to update all
         name: Option<String>,
+    },
+
+    /// Install all skills from a specific tap
+    InstallAll {
+        /// Name of the tap to install from (e.g., EYH0602/skillshub)
+        name: String,
     },
 }
 

@@ -43,7 +43,7 @@ skillshub/
 - **Taps**: Git repositories containing skills (like Homebrew taps). Skills are auto-discovered by scanning for `SKILL.md` files.
 - **Skills**: Reusable instruction sets for AI coding agents, defined in `SKILL.md` files
 - **Database**: `~/.skillshub/db.json` tracks installed skills, their versions, and external skills
-- **Installation**: Skills are downloaded/copied to `~/.skillshub/skills/<tap>/<skill>/`
+- **Installation**: Skills are downloaded/copied to `~/.skillshub/skills/<owner>/<repo>/<skill>/`
 - **Linking**: Per-skill symlinks are created from agent skill directories
 - **External Skills**: Skills installed through other means (marketplace, manual) are discovered and synced
 - **Agents**: Coding assistants like Claude, Codex, OpenCode, Aider, Cursor, Continue
@@ -55,7 +55,7 @@ GitHub Tap Repository          Local Database           Installed Skills
 ┌─────────────────────┐       ┌──────────────┐        ┌─────────────────────┐
 │ any/path/           │──────▶│ db.json      │◀──────▶│ ~/.skillshub/       │
 │   SKILL.md          │       │ - taps       │        │   skills/           │
-│   (auto-discovered) │       │ - installed  │        │     tap/skill/      │
+│   (auto-discovered) │       │ - installed  │        │     owner/repo/skill│
 └─────────────────────┘       │ - external   │        └─────────────────────┘
                               └──────────────┘
                                      ▲
@@ -107,8 +107,10 @@ The default tap is `EYH0602/skillshub` (bundled). Add third-party taps like `ant
 skillshub tap list                          # List configured taps
 # Skills column shows installed/available counts (e.g., 2/15 or 1/?)
 skillshub tap add <github-url>              # Add a third-party tap
+skillshub tap add <github-url> --install    # Add tap and install all skills
 skillshub tap remove <owner/repo>           # Remove a tap
 skillshub tap update [owner/repo]           # Refresh tap registry
+skillshub tap install-all <owner/repo>      # Install all skills from a tap
 ```
 
 ### Agent Management
@@ -175,7 +177,7 @@ cargo run -- list        # Run directly
 ```bash
 cargo run -- tap list
 cargo run -- list
-cargo run -- install skillshub/code-reviewer
+cargo run -- install EYH0602/skillshub/code-reviewer
 cargo run -- link
 cargo run -- agents
 cargo run -- external list
@@ -227,7 +229,7 @@ All three skills above would be discovered when adding this repo as a tap.
 1. Create directory under `skills/<skill-name>/`
 2. Add `SKILL.md` with frontmatter and instructions
 3. Optionally add `scripts/` and `references/` subdirectories
-4. Test with `cargo run -- info skillshub/<skill-name>`
+4. Test with `cargo run -- info EYH0602/skillshub/<skill-name>`
 
 ### Adding a new agent
 

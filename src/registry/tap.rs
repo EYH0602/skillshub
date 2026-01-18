@@ -27,7 +27,7 @@ pub struct TapRow {
 }
 
 /// Add a new tap from a GitHub URL
-pub fn add_tap(url: &str) -> Result<()> {
+pub fn add_tap(url: &str, install: bool) -> Result<()> {
     let github_url = parse_github_url(url)?;
     let tap_name = github_url.tap_name();
 
@@ -56,6 +56,7 @@ pub fn add_tap(url: &str) -> Result<()> {
         updated_at: Some(Utc::now()),
         is_default: false,
         is_bundled: false,
+        cached_registry: Some(registry.clone()),
     };
 
     db::add_tap(&mut db, &tap_name, tap_info);
@@ -68,8 +69,8 @@ pub fn add_tap(url: &str) -> Result<()> {
         registry.skills.len()
     );
 
-    // Show available skills
-    if !registry.skills.is_empty() {
+    // Show available skills (only if not installing)
+    if !install && !registry.skills.is_empty() {
         println!("\n  Available skills:");
         for (name, entry) in registry.skills.iter().take(10) {
             let desc = entry.description.as_deref().unwrap_or("No description");
@@ -78,6 +79,12 @@ pub fn add_tap(url: &str) -> Result<()> {
         if registry.skills.len() > 10 {
             println!("    {} ... and {} more", "•".cyan(), registry.skills.len() - 10);
         }
+    }
+
+    // Install all skills if requested
+    if install && !registry.skills.is_empty() {
+        println!();
+        super::skill::install_all_from_tap(&tap_name)?;
     }
 
     Ok(())
@@ -179,7 +186,7 @@ pub fn update_tap(name: Option<&str>) -> Result<()> {
     };
 
     for tap_name in taps_to_update {
-        let tap = db.taps.get(&tap_name).unwrap();
+        let tap = db.taps.get(&tap_name).unwrap().clone();
 
         if tap.is_default {
             println!("  {} {} (default tap, skipped)", "○".yellow(), tap_name);
@@ -188,12 +195,8 @@ pub fn update_tap(name: Option<&str>) -> Result<()> {
 
         print!("  {} Updating {}...", "○".yellow(), tap_name);
 
-        match update_single_tap(&tap_name, tap) {
+        match update_single_tap(&mut db, &tap_name, &tap) {
             Ok(count) => {
-                // Update timestamp
-                if let Some(t) = db.taps.get_mut(&tap_name) {
-                    t.updated_at = Some(Utc::now());
-                }
                 println!("\r  {} {} ({} skills)", "✓".green(), tap_name, count);
             }
             Err(e) => {
@@ -207,11 +210,19 @@ pub fn update_tap(name: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-/// Update a single tap and return skill count
-fn update_single_tap(name: &str, tap: &TapInfo) -> Result<usize> {
+/// Update a single tap, refresh cache, and return skill count
+fn update_single_tap(db: &mut Database, name: &str, tap: &TapInfo) -> Result<usize> {
     let github_url = parse_github_url(&tap.url)?;
     let registry = discover_skills_from_repo(&github_url, name)?;
-    Ok(registry.skills.len())
+    let count = registry.skills.len();
+
+    // Update cache and timestamp in database
+    if let Some(t) = db.taps.get_mut(name) {
+        t.cached_registry = Some(registry);
+        t.updated_at = Some(Utc::now());
+    }
+
+    Ok(count)
 }
 
 /// Count local skills in the embedded directory
@@ -237,18 +248,25 @@ fn format_skills_count(installed: usize, available: Option<usize>) -> String {
     format!("{}/{}", installed, available_display)
 }
 
-/// Get the registry for a tap (fetches from remote or generates for default)
+/// Get the registry for a tap (uses cache if available, otherwise fetches from remote)
 pub fn get_tap_registry(db: &Database, tap_name: &str) -> Result<TapRegistry> {
     let tap = db::get_tap(db, tap_name).with_context(|| format!("Tap '{}' not found", tap_name))?;
 
     if tap.is_bundled {
         // Generate registry from local skills
-        generate_local_registry()
-    } else {
-        // Discover skills from remote repo by scanning for SKILL.md files
-        let github_url = parse_github_url(&tap.url)?;
-        discover_skills_from_repo(&github_url, tap_name)
+        return generate_local_registry();
     }
+
+    // Return cached registry if available
+    if let Some(ref registry) = tap.cached_registry {
+        return Ok(registry.clone());
+    }
+
+    // No cache available, fetch from remote
+    // This shouldn't normally happen since we cache on add_tap and update_tap,
+    // but handles edge cases like database migration from older versions
+    let github_url = parse_github_url(&tap.url)?;
+    discover_skills_from_repo(&github_url, tap_name)
 }
 
 /// Generate a registry from local/bundled skills
