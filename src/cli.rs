@@ -68,6 +68,10 @@ pub enum Commands {
     #[command(subcommand)]
     External(ExternalCommands),
 
+    /// Clean up cache, links, or installed skills
+    #[command(subcommand)]
+    Clean(CleanCommands),
+
     /// Migrate old-style installations to the new registry format
     Migrate,
 }
@@ -118,5 +122,18 @@ pub enum ExternalCommands {
     Forget {
         /// Name of the external skill to forget
         name: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum CleanCommands {
+    /// Clear cached registry data from taps (forces re-fetch on next update)
+    Cache,
+
+    /// Remove all skillshub-managed symlinks from agent directories
+    Links {
+        /// Also remove all installed skills from ~/.skillshub/skills
+        #[arg(long)]
+        remove_skills: bool,
     },
 }

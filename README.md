@@ -150,6 +150,19 @@ skillshub external forget my-skill
 
 When you run `skillshub link`, external skills are automatically discovered from all agent directories and synced to all other agents. If the same skill name exists in multiple agents, the first one found is used as the source.
 
+### Cleanup
+
+```bash
+# Clear cached tap registry data (forces re-fetch on next update)
+skillshub clean cache
+
+# Remove all skillshub-managed symlinks from agent directories
+skillshub clean links
+
+# Remove symlinks AND delete all installed skills
+skillshub clean links --remove-skills
+```
+
 ## Supported Agents
 
 Skillshub automatically detects and links to these coding agents:

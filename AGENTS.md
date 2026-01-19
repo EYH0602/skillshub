@@ -19,6 +19,7 @@ skillshub/
 │   ├── commands/               # Command implementations
 │   │   ├── mod.rs
 │   │   ├── agents.rs           # Show detected agents
+│   │   ├── clean.rs            # Clean cache and links
 │   │   ├── external.rs         # External skills management
 │   │   └── link.rs             # Link skills to agents
 │   └── registry/               # Tap-based registry system
@@ -128,6 +129,15 @@ skillshub external forget <name>            # Stop tracking an external skill
 ```
 
 External skills are skills found in agent directories that weren't installed via skillshub (e.g., from Claude marketplace or manual installation). They are automatically discovered from all agent directories during `skillshub link` and synced to all other agents.
+
+### Cleanup
+```bash
+skillshub clean cache                       # Clear cached registry data from taps
+skillshub clean links                       # Remove all skillshub-managed symlinks
+skillshub clean links --remove-skills       # Remove symlinks AND delete all installed skills
+```
+
+The `clean cache` command clears cached tap registries, forcing a fresh fetch on next update. The `clean links` command removes all symlinks that skillshub created in agent directories. With `--remove-skills`, it also deletes all installed skills from `~/.skillshub/skills/`.
 
 ### Migration
 ```bash
