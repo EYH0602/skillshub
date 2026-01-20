@@ -1,6 +1,6 @@
 [package]
 name = "skillshub"
-version = "0.1.7"
+version = "0.1.8"
 edition = "2021"
 description = "A package manager for AI coding agent skills - like homebrew for skills"
 authors = ["Yifeng He <yfhe.cs@gmail.com>"]
