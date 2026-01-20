@@ -133,8 +133,8 @@ pub struct GitHubUrl {
     /// Repository name
     pub repo: String,
 
-    /// Branch or commit (default: "main")
-    pub branch: String,
+    /// Branch or commit (None means use repository's default branch)
+    pub branch: Option<String>,
 
     /// Path within the repository (optional)
     pub path: Option<String>,
@@ -153,8 +153,10 @@ impl GitHubUrl {
 
     /// Check if the branch looks like a commit SHA (40 hex chars or 7+ hex prefix)
     pub fn is_commit_sha(&self) -> bool {
-        let b = &self.branch;
-        b.len() >= 7 && b.chars().all(|c| c.is_ascii_hexdigit())
+        self.branch
+            .as_ref()
+            .map(|b| b.len() >= 7 && b.chars().all(|c| c.is_ascii_hexdigit()))
+            .unwrap_or(false)
     }
 
     /// Get the skill name from the path (last component)
@@ -191,14 +193,14 @@ impl GitHubUrl {
         )
     }
 
-    /// Get the raw content URL for a file
-    pub fn raw_url(&self, path: &str) -> String {
+    /// Get the raw content URL for a file, using the provided branch
+    pub fn raw_url(&self, path: &str, branch: &str) -> String {
         format!(
             "{}/{}/{}/{}/{}",
             Self::github_raw_base(),
             self.owner,
             self.repo,
-            self.branch,
+            branch,
             path
         )
     }
@@ -313,7 +315,7 @@ mod tests {
         let url = GitHubUrl {
             owner: "user".to_string(),
             repo: "repo".to_string(),
-            branch: "main".to_string(),
+            branch: Some("main".to_string()),
             path: Some("skills".to_string()),
         };
 
@@ -325,9 +327,22 @@ mod tests {
             "https://api.github.com/repos/user/repo/tarball/main"
         );
         assert_eq!(
-            url.raw_url("registry.json"),
+            url.raw_url("registry.json", "main"),
             "https://raw.githubusercontent.com/user/repo/main/registry.json"
         );
+    }
+
+    #[test]
+    fn test_github_url_with_no_branch() {
+        let url = GitHubUrl {
+            owner: "user".to_string(),
+            repo: "repo".to_string(),
+            branch: None,
+            path: None,
+        };
+
+        assert!(!url.is_commit_sha());
+        assert_eq!(url.tap_name(), "user/repo");
     }
 
     #[test]
