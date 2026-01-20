@@ -7,7 +7,7 @@ use tabled::{
 };
 
 use super::db;
-use super::github::{download_skill, get_latest_commit, parse_github_url};
+use super::github::{download_skill, get_default_branch, get_latest_commit, parse_github_url};
 use super::models::{InstalledSkill, SkillId};
 use super::tap::get_tap_registry;
 use crate::commands::link_to_agents;
@@ -164,9 +164,9 @@ pub fn add_skill_from_url(url: &str) -> Result<()> {
 
     println!("{} Adding '{}' from {}", "=>".green().bold(), full_name, url);
 
-    // Determine commit to use
+    // Determine commit to use (if branch looks like a commit SHA, use it as the commit)
     let commit = if github_url.is_commit_sha() {
-        Some(github_url.branch.clone())
+        github_url.branch.clone()
     } else {
         None
     };
@@ -388,7 +388,19 @@ pub fn update_skill(full_name: Option<&str>) -> Result<()> {
             }
         };
 
-        let latest_commit = match get_latest_commit(&github_url, Some(&skill_entry.path)) {
+        // Resolve branch for the tap
+        let resolved_branch = match &github_url.branch {
+            Some(b) => b.clone(),
+            None => match get_default_branch(&github_url.owner, &github_url.repo) {
+                Ok(b) => b,
+                Err(e) => {
+                    println!("  {} {} ({})", "✗".red(), skill_name, e);
+                    continue;
+                }
+            },
+        };
+
+        let latest_commit = match get_latest_commit(&github_url, Some(&skill_entry.path), &resolved_branch) {
             Ok(c) => c,
             Err(e) => {
                 println!("  {} {} ({})", "✗".red(), skill_name, e);

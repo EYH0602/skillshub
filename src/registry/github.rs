@@ -45,13 +45,53 @@ struct TreeEntry {
     entry_type: String,
 }
 
+/// GitHub Repository API response (partial)
+#[derive(Debug, Deserialize)]
+struct RepoInfo {
+    default_branch: String,
+}
+
+/// Get the default branch for a repository from GitHub API
+pub fn get_default_branch(owner: &str, repo: &str) -> Result<String> {
+    let client = build_client()?;
+    let api_base = std::env::var("SKILLSHUB_GITHUB_API_BASE").unwrap_or_else(|_| "https://api.github.com".to_string());
+    let url = format!("{}/repos/{}/{}", api_base, owner, repo);
+
+    let response = with_auth(client.get(&url))
+        .send()
+        .with_context(|| format!("Failed to fetch repo info from {}", url))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        if status == reqwest::StatusCode::NOT_FOUND {
+            anyhow::bail!(
+                "Repository not found on GitHub: {}/{}\n\
+                 Please check that:\n\
+                 - The repository exists and is spelled correctly\n\
+                 - The repository is public (or GITHUB_TOKEN is set for private repos)",
+                owner,
+                repo
+            );
+        }
+        anyhow::bail!("Failed to fetch repo info: HTTP {}", status);
+    }
+
+    let info: RepoInfo = response
+        .json()
+        .with_context(|| "Failed to parse repository info response")?;
+    Ok(info.default_branch)
+}
+
 /// Parse a GitHub URL or repository identifier into components
 ///
 /// Supports formats:
-/// - owner/repo (short format, defaults to GitHub)
-/// - https://github.com/owner/repo
+/// - owner/repo (short format, uses repo's default branch)
+/// - https://github.com/owner/repo (uses repo's default branch)
 /// - https://github.com/owner/repo/tree/branch
 /// - https://github.com/owner/repo/tree/branch/path/to/folder
+///
+/// When no branch is specified in the URL, `branch` will be `None`,
+/// indicating that the repository's default branch should be used.
 pub fn parse_github_url(url: &str) -> Result<GitHubUrl> {
     let url = url.trim_end_matches('/');
 
@@ -91,7 +131,7 @@ pub fn parse_github_url(url: &str) -> Result<GitHubUrl> {
 
     // Check for /tree/branch/path format
     let (branch, subpath) = if parts.len() > 3 && parts[2] == "tree" {
-        let branch = parts[3].to_string();
+        let branch = Some(parts[3].to_string());
         let subpath = if parts.len() > 4 {
             Some(parts[4..].join("/"))
         } else {
@@ -99,7 +139,8 @@ pub fn parse_github_url(url: &str) -> Result<GitHubUrl> {
         };
         (branch, subpath)
     } else {
-        ("main".to_string(), None)
+        // No branch specified - use None to indicate "use default branch"
+        (None, None)
     };
 
     Ok(GitHubUrl {
@@ -151,8 +192,14 @@ fn is_valid_repo_id(s: &str) -> bool {
 pub fn discover_skills_from_repo(github_url: &GitHubUrl, tap_name: &str) -> Result<TapRegistry> {
     let client = build_client()?;
 
+    // Resolve branch: use specified branch or fetch the repository's default branch
+    let branch = match &github_url.branch {
+        Some(b) => b.clone(),
+        None => get_default_branch(&github_url.owner, &github_url.repo)?,
+    };
+
     // Fetch the full repo tree with recursive=1
-    let tree_url = format!("{}/git/trees/{}?recursive=1", github_url.api_url(), github_url.branch);
+    let tree_url = format!("{}/git/trees/{}?recursive=1", github_url.api_url(), branch);
 
     let response = with_auth(client.get(&tree_url))
         .send()
@@ -162,10 +209,9 @@ pub fn discover_skills_from_repo(github_url: &GitHubUrl, tap_name: &str) -> Resu
         let status = response.status();
         if status == reqwest::StatusCode::NOT_FOUND {
             anyhow::bail!(
-                "Repository not found on GitHub: {}/{}\n\
-                 Please check that:\n\
-                 - The repository exists and is spelled correctly\n\
-                 - The repository is public (or GITHUB_TOKEN is set for private repos)",
+                "Branch '{}' not found in repository {}/{}\n\
+                 Please check that the branch exists.",
+                branch,
                 github_url.owner,
                 github_url.repo
             );
@@ -198,7 +244,7 @@ pub fn discover_skills_from_repo(github_url: &GitHubUrl, tap_name: &str) -> Resu
     // Fetch metadata for each skill
     let mut skills = HashMap::new();
     for skill_path in &skill_paths {
-        let skill_md_url = github_url.raw_url(&format!("{}/SKILL.md", skill_path));
+        let skill_md_url = github_url.raw_url(&format!("{}/SKILL.md", skill_path), &branch);
 
         // Note: raw.githubusercontent.com doesn't need auth, but we add it anyway
         match with_auth(client.get(&skill_md_url)).send() {
@@ -256,10 +302,10 @@ fn parse_skill_md_content(content: &str) -> Option<(String, Option<String>)> {
 }
 
 /// Get the latest commit SHA for a path in a repository
-pub fn get_latest_commit(github_url: &GitHubUrl, path: Option<&str>) -> Result<String> {
+pub fn get_latest_commit(github_url: &GitHubUrl, path: Option<&str>, resolved_branch: &str) -> Result<String> {
     let client = build_client()?;
 
-    let mut url = format!("{}/commits?sha={}&per_page=1", github_url.api_url(), github_url.branch);
+    let mut url = format!("{}/commits?sha={}&per_page=1", github_url.api_url(), resolved_branch);
 
     if let Some(p) = path {
         url.push_str(&format!("&path={}", p));
@@ -286,7 +332,13 @@ pub fn get_latest_commit(github_url: &GitHubUrl, path: Option<&str>) -> Result<S
 ///
 /// Downloads the tarball, extracts the specific skill folder, and copies to destination.
 pub fn download_skill(github_url: &GitHubUrl, skill_path: &str, dest: &Path, commit: Option<&str>) -> Result<String> {
-    let git_ref = commit.unwrap_or(&github_url.branch);
+    // Resolve branch: use specified branch or fetch the repository's default branch
+    let resolved_branch = match &github_url.branch {
+        Some(b) => b.clone(),
+        None => get_default_branch(&github_url.owner, &github_url.repo)?,
+    };
+
+    let git_ref = commit.unwrap_or(&resolved_branch);
 
     let client = build_client()?;
 
@@ -308,7 +360,7 @@ pub fn download_skill(github_url: &GitHubUrl, skill_path: &str, dest: &Path, com
 
     // Get the actual commit SHA from response headers or fetch it
     let commit_sha = commit.map(|s| s.to_string()).unwrap_or_else(|| {
-        get_latest_commit(github_url, Some(skill_path)).unwrap_or_else(|err| {
+        get_latest_commit(github_url, Some(skill_path), &resolved_branch).unwrap_or_else(|err| {
             println!(
                 "Warning: failed to resolve latest commit for {} ({}), using {}",
                 github_url.repo, err, git_ref
@@ -417,7 +469,7 @@ name: minimal-skill
         let url = parse_github_url("https://github.com/owner/repo").unwrap();
         assert_eq!(url.owner, "owner");
         assert_eq!(url.repo, "repo");
-        assert_eq!(url.branch, "main");
+        assert!(url.branch.is_none()); // No branch specified = None (use repo's default)
         assert!(url.path.is_none());
     }
 
@@ -426,7 +478,7 @@ name: minimal-skill
         let url = parse_github_url("https://github.com/owner/repo/tree/develop").unwrap();
         assert_eq!(url.owner, "owner");
         assert_eq!(url.repo, "repo");
-        assert_eq!(url.branch, "develop");
+        assert_eq!(url.branch, Some("develop".to_string()));
         assert!(url.path.is_none());
     }
 
@@ -435,8 +487,18 @@ name: minimal-skill
         let url = parse_github_url("https://github.com/owner/repo/tree/main/path/to/folder").unwrap();
         assert_eq!(url.owner, "owner");
         assert_eq!(url.repo, "repo");
-        assert_eq!(url.branch, "main");
+        assert_eq!(url.branch, Some("main".to_string()));
         assert_eq!(url.path, Some("path/to/folder".to_string()));
+    }
+
+    #[test]
+    fn test_parse_github_url_with_master_branch() {
+        // Explicitly specifying master branch should work
+        let url = parse_github_url("https://github.com/owner/repo/tree/master").unwrap();
+        assert_eq!(url.owner, "owner");
+        assert_eq!(url.repo, "repo");
+        assert_eq!(url.branch, Some("master".to_string()));
+        assert!(url.path.is_none());
     }
 
     #[test]
@@ -444,6 +506,7 @@ name: minimal-skill
         let url = parse_github_url("github.com/owner/repo").unwrap();
         assert_eq!(url.owner, "owner");
         assert_eq!(url.repo, "repo");
+        assert!(url.branch.is_none()); // No branch specified = None
     }
 
     #[test]
@@ -451,6 +514,7 @@ name: minimal-skill
         let url = parse_github_url("https://github.com/owner/repo/").unwrap();
         assert_eq!(url.owner, "owner");
         assert_eq!(url.repo, "repo");
+        assert!(url.branch.is_none());
     }
 
     #[test]
@@ -465,7 +529,7 @@ name: minimal-skill
         let url = parse_github_url("owner/repo").unwrap();
         assert_eq!(url.owner, "owner");
         assert_eq!(url.repo, "repo");
-        assert_eq!(url.branch, "main");
+        assert!(url.branch.is_none()); // No branch specified = None (use repo's default)
         assert!(url.path.is_none());
     }
 
@@ -474,6 +538,7 @@ name: minimal-skill
         let url = parse_github_url("my-org/my-repo").unwrap();
         assert_eq!(url.owner, "my-org");
         assert_eq!(url.repo, "my-repo");
+        assert!(url.branch.is_none());
     }
 
     #[test]
@@ -481,6 +546,7 @@ name: minimal-skill
         let url = parse_github_url("user_name/repo_name").unwrap();
         assert_eq!(url.owner, "user_name");
         assert_eq!(url.repo, "repo_name");
+        assert!(url.branch.is_none());
     }
 
     #[test]
@@ -488,6 +554,7 @@ name: minimal-skill
         let url = parse_github_url("owner/repo.js").unwrap();
         assert_eq!(url.owner, "owner");
         assert_eq!(url.repo, "repo.js");
+        assert!(url.branch.is_none());
     }
 
     #[test]
