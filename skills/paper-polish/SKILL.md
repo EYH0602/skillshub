@@ -27,7 +27,12 @@ metadata:
 ### Grammar
 
 - Section titles should have consistent [capitalization](https://www.grammarly.com/blog/title-case-sentence-case/).
-  I prefer sentence case.
+  - Title Case: Capitalize the first and last words and all major words in between.
+    - Good: Introduction to Fuzzing with LLMs
+  - Sentence case: Capitalize only the first word and proper nouns.
+    - Good: Introduction to fuzzing with LLMs
+  - Choose one style and be consistent throughout the paper.
+
 - Avoid passive voice unless strongly justifiable.
   Passive voice is ambiguous because it has no subject unless followed by "by...".
   - Bad: LLM was applied to fuzzing. (Who applied it? The authors or someone else?)
