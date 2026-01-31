@@ -29,13 +29,19 @@ impl MockGitHub {
     /// Mock the tree API for skill discovery
     ///
     /// This simulates the GitHub Tree API response used to discover skills
-    /// by scanning for SKILL.md files.
+    /// by scanning for SKILL.md files. When a skill path is empty (""),
+    /// the SKILL.md is at the repository root.
     pub async fn mock_tree_response(&self, owner: &str, repo: &str, skills: &[(&str, &str)]) {
         let tree_entries: Vec<_> = skills
             .iter()
             .map(|(path, _)| {
+                let skill_md_path = if path.is_empty() {
+                    "SKILL.md".to_string()
+                } else {
+                    format!("{}/SKILL.md", path)
+                };
                 json!({
-                    "path": format!("{}/SKILL.md", path),
+                    "path": skill_md_path,
                     "type": "blob"
                 })
             })
@@ -53,9 +59,16 @@ impl MockGitHub {
     }
 
     /// Mock raw file content (SKILL.md)
+    ///
+    /// When skill_path is empty, the SKILL.md is at the repository root.
     pub async fn mock_skill_md(&self, owner: &str, repo: &str, branch: &str, skill_path: &str, content: &str) {
+        let url_path = if skill_path.is_empty() {
+            format!("/{}/{}/{}/SKILL.md", owner, repo, branch)
+        } else {
+            format!("/{}/{}/{}/{}/SKILL.md", owner, repo, branch, skill_path)
+        };
         Mock::given(method("GET"))
-            .and(path(format!("/{}/{}/{}/{}/SKILL.md", owner, repo, branch, skill_path)))
+            .and(path(url_path))
             .respond_with(ResponseTemplate::new(200).set_body_string(content))
             .mount(&self.server)
             .await;

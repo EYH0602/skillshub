@@ -80,6 +80,7 @@ Each agent has its own skills subdirectory name:
 | Aider    | `~/.aider`    | `~/.aider/skills`    |
 | Cursor   | `~/.cursor`   | `~/.cursor/skills`   |
 | Continue | `~/.continue` | `~/.continue/skills` |
+| Trae     | `~/.trae`     | `~/.trae/skills`     |
 
 ## CLI Commands
 

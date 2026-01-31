@@ -175,6 +175,7 @@ Skillshub automatically detects and links to these coding agents:
 | Aider    | `~/.aider`    | `~/.aider/skills`    |
 | Cursor   | `~/.cursor`   | `~/.cursor/skills`   |
 | Continue | `~/.continue` | `~/.continue/skills` |
+| Trae     | `~/.trae`     | `~/.trae/skills`     |
 
 ## GitHub API Rate Limiting
 
