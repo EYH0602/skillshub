@@ -58,6 +58,10 @@ Skill instructions here.
 ///
 /// The tarball has the structure GitHub uses:
 /// `{owner}-{repo}-{short_commit}/path/to/skill/SKILL.md`
+///
+/// When a skill path is empty (""), the SKILL.md is placed at the
+/// tarball root (i.e., `{prefix}/SKILL.md`), representing a repo
+/// that itself is a skill.
 pub fn create_skill_tarball(owner: &str, repo: &str, commit: &str, skills: &[(&str, &str)]) -> Vec<u8> {
     let mut archive_data = Vec::new();
     {
@@ -70,7 +74,12 @@ pub fn create_skill_tarball(owner: &str, repo: &str, commit: &str, skills: &[(&s
 
         for (skill_path, skill_md_content) in skills {
             // Add SKILL.md file
-            let file_path = format!("{}/{}/SKILL.md", prefix, skill_path);
+            // For root-level skills (empty path), place SKILL.md directly under prefix
+            let file_path = if skill_path.is_empty() {
+                format!("{}/SKILL.md", prefix)
+            } else {
+                format!("{}/{}/SKILL.md", prefix, skill_path)
+            };
             let mut header = tar::Header::new_gnu();
             header.set_path(&file_path).unwrap();
             header.set_size(skill_md_content.len() as u64);
