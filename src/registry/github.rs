@@ -222,20 +222,8 @@ pub fn discover_skills_from_repo(github_url: &GitHubUrl, tap_name: &str) -> Resu
     let tree_response: TreeResponse = response.json().with_context(|| "Failed to parse tree response")?;
 
     // Find all SKILL.md files
-    let skill_paths: Vec<String> = tree_response
-        .tree
-        .iter()
-        .filter(|entry| entry.entry_type == "blob" && entry.path.ends_with("/SKILL.md"))
-        .map(|entry| {
-            // Extract parent directory path: "skills/code-reviewer/SKILL.md" -> "skills/code-reviewer"
-            entry
-                .path
-                .rsplit_once('/')
-                .map(|(parent, _)| parent.to_string())
-                .unwrap_or_default()
-        })
-        .filter(|path| !path.is_empty())
-        .collect();
+    // A SKILL.md can be at the root (path == "SKILL.md") or in subdirectories (path ends with "/SKILL.md")
+    let skill_paths = extract_skill_paths(&tree_response.tree);
 
     if skill_paths.is_empty() {
         anyhow::bail!("No skills found in repository (no SKILL.md files detected)");
@@ -244,7 +232,12 @@ pub fn discover_skills_from_repo(github_url: &GitHubUrl, tap_name: &str) -> Resu
     // Fetch metadata for each skill
     let mut skills = HashMap::new();
     for skill_path in &skill_paths {
-        let skill_md_url = github_url.raw_url(&format!("{}/SKILL.md", skill_path), &branch);
+        let skill_md_url = if skill_path.is_empty() {
+            // Root-level SKILL.md
+            github_url.raw_url("SKILL.md", &branch)
+        } else {
+            github_url.raw_url(&format!("{}/SKILL.md", skill_path), &branch)
+        };
 
         // Note: raw.githubusercontent.com doesn't need auth, but we add it anyway
         match with_auth(client.get(&skill_md_url)).send() {
@@ -264,16 +257,20 @@ pub fn discover_skills_from_repo(github_url: &GitHubUrl, tap_name: &str) -> Resu
             }
             _ => {
                 // If we can't fetch metadata, use directory name as skill name
-                if let Some(skill_name) = skill_path.rsplit('/').next() {
-                    skills.insert(
-                        skill_name.to_string(),
-                        SkillEntry {
-                            path: skill_path.clone(),
-                            description: None,
-                            homepage: None,
-                        },
-                    );
-                }
+                // For root-level skills, use the repo name
+                let skill_name = if skill_path.is_empty() {
+                    &github_url.repo
+                } else {
+                    skill_path.rsplit('/').next().unwrap_or(skill_path)
+                };
+                skills.insert(
+                    skill_name.to_string(),
+                    SkillEntry {
+                        path: skill_path.clone(),
+                        description: None,
+                        homepage: None,
+                    },
+                );
             }
         }
     }
@@ -388,7 +385,12 @@ pub fn download_skill(github_url: &GitHubUrl, skill_path: &str, dest: &Path, com
         .path();
 
     // Find the skill within the extracted archive
-    let skill_source = extracted_dir.join(skill_path);
+    // For root-level skills (empty path), the skill is the extracted directory itself
+    let skill_source = if skill_path.is_empty() {
+        extracted_dir.clone()
+    } else {
+        extracted_dir.join(skill_path)
+    };
 
     if !skill_source.exists() {
         anyhow::bail!("Skill path '{}' not found in repository", skill_path);
@@ -396,7 +398,10 @@ pub fn download_skill(github_url: &GitHubUrl, skill_path: &str, dest: &Path, com
 
     // Verify it has SKILL.md
     if !skill_source.join("SKILL.md").exists() {
-        anyhow::bail!("Invalid skill: no SKILL.md found in '{}'", skill_path);
+        anyhow::bail!(
+            "Invalid skill: no SKILL.md found in '{}'",
+            if skill_path.is_empty() { "(root)" } else { skill_path }
+        );
     }
 
     // Create destination and copy files
@@ -404,6 +409,24 @@ pub fn download_skill(github_url: &GitHubUrl, skill_path: &str, dest: &Path, com
     copy_dir_contents(&skill_source, dest)?;
 
     Ok(commit_sha)
+}
+
+/// Extract skill directory paths from a list of tree entries.
+///
+/// Finds entries that are SKILL.md files (either at root or in subdirectories)
+/// and returns the parent directory path for each. A root-level SKILL.md
+/// produces an empty string path.
+fn extract_skill_paths(tree: &[TreeEntry]) -> Vec<String> {
+    tree.iter()
+        .filter(|entry| entry.entry_type == "blob" && (entry.path == "SKILL.md" || entry.path.ends_with("/SKILL.md")))
+        .map(|entry| {
+            entry
+                .path
+                .rsplit_once('/')
+                .map(|(parent, _)| parent.to_string())
+                .unwrap_or_default()
+        })
+        .collect()
 }
 
 /// Recursively copy directory contents
@@ -579,5 +602,69 @@ name: minimal-skill
         assert!(!is_valid_repo_id(".owner/repo"));
         // Invalid characters
         assert!(!is_valid_repo_id("owner/repo name"));
+    }
+
+    /// Helper to create a TreeEntry for tests
+    fn tree_entry(path: &str, entry_type: &str) -> TreeEntry {
+        TreeEntry {
+            path: path.to_string(),
+            entry_type: entry_type.to_string(),
+        }
+    }
+
+    #[test]
+    fn test_extract_skill_paths_subdirectory() {
+        let tree = vec![
+            tree_entry("skills/code-reviewer/SKILL.md", "blob"),
+            tree_entry("skills/test-skill/SKILL.md", "blob"),
+            tree_entry("README.md", "blob"),
+        ];
+        let paths = extract_skill_paths(&tree);
+        assert_eq!(paths, vec!["skills/code-reviewer", "skills/test-skill"]);
+    }
+
+    #[test]
+    fn test_extract_skill_paths_root_level() {
+        // Repo that IS a skill (SKILL.md at root)
+        let tree = vec![tree_entry("SKILL.md", "blob"), tree_entry("README.md", "blob")];
+        let paths = extract_skill_paths(&tree);
+        assert_eq!(paths, vec![""]);
+    }
+
+    #[test]
+    fn test_extract_skill_paths_root_and_subdirectory() {
+        // Repo with both root-level and subdirectory skills
+        let tree = vec![
+            tree_entry("SKILL.md", "blob"),
+            tree_entry("skills/other-skill/SKILL.md", "blob"),
+            tree_entry("README.md", "blob"),
+        ];
+        let paths = extract_skill_paths(&tree);
+        assert_eq!(paths, vec!["", "skills/other-skill"]);
+    }
+
+    #[test]
+    fn test_extract_skill_paths_no_skills() {
+        let tree = vec![tree_entry("README.md", "blob"), tree_entry("src/main.rs", "blob")];
+        let paths = extract_skill_paths(&tree);
+        assert!(paths.is_empty());
+    }
+
+    #[test]
+    fn test_extract_skill_paths_ignores_trees() {
+        // Directories (type "tree") should be ignored even if named SKILL.md
+        let tree = vec![
+            tree_entry("SKILL.md", "tree"),
+            tree_entry("skills/test/SKILL.md", "blob"),
+        ];
+        let paths = extract_skill_paths(&tree);
+        assert_eq!(paths, vec!["skills/test"]);
+    }
+
+    #[test]
+    fn test_extract_skill_paths_deep_nesting() {
+        let tree = vec![tree_entry("a/b/c/SKILL.md", "blob")];
+        let paths = extract_skill_paths(&tree);
+        assert_eq!(paths, vec!["a/b/c"]);
     }
 }
