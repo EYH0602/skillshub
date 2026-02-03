@@ -41,10 +41,6 @@ pub struct TapInfo {
     #[serde(default)]
     pub is_default: bool,
 
-    /// Whether this tap is bundled locally with the binary
-    #[serde(default)]
-    pub is_bundled: bool,
-
     /// Cached skill registry to avoid repeated GitHub API calls
     /// This is populated when the tap is added or updated
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -65,10 +61,6 @@ pub struct InstalledSkill {
 
     /// When the skill was installed
     pub installed_at: DateTime<Utc>,
-
-    /// Whether this skill is from local/bundled source (no download needed)
-    #[serde(default)]
-    pub local: bool,
 
     /// Source URL for the skill (for remote skills added directly)
     #[serde(default)]
@@ -360,7 +352,6 @@ mod tests {
             skills_path: "skills".to_string(),
             updated_at: None,
             is_default: false,
-            is_bundled: false,
             cached_registry: None,
         };
 
@@ -393,7 +384,6 @@ mod tests {
             skills_path: "skills".to_string(),
             updated_at: None,
             is_default: false,
-            is_bundled: false,
             cached_registry: Some(registry),
         };
 
@@ -410,8 +400,7 @@ mod tests {
             "url": "https://github.com/user/repo",
             "skills_path": "skills",
             "updated_at": null,
-            "is_default": false,
-            "is_bundled": false
+            "is_default": false
         }"#;
 
         let tap: TapInfo = serde_json::from_str(json).unwrap();
@@ -449,7 +438,6 @@ mod tests {
             skills_path: "skills".to_string(),
             updated_at: Some(chrono::Utc::now()),
             is_default: false,
-            is_bundled: false,
             cached_registry: Some(registry),
         };
 

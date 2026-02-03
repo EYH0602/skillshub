@@ -55,7 +55,6 @@ pub fn add_tap(url: &str, install: bool) -> Result<()> {
         skills_path: "skills".to_string(),
         updated_at: Some(Utc::now()),
         is_default: false,
-        is_bundled: false,
         cached_registry: Some(registry.clone()),
     };
 
@@ -136,11 +135,7 @@ pub fn list_taps() -> Result<()> {
 
     for (name, tap) in &db.taps {
         let installed_count = count_installed_skills(&db, name);
-        let available_count = if tap.is_bundled {
-            count_local_skills().ok()
-        } else {
-            get_tap_registry(&db, name).ok().map(|registry| registry.skills.len())
-        };
+        let available_count = get_tap_registry(&db, name).ok().map(|registry| registry.skills.len());
         let skills_count = format_skills_count(installed_count, available_count);
 
         rows.push(TapRow {
@@ -220,16 +215,6 @@ fn update_single_tap(db: &mut Database, name: &str, tap: &TapInfo) -> Result<usi
     Ok(count)
 }
 
-/// Count local skills in the embedded directory
-fn count_local_skills() -> Result<usize> {
-    use crate::paths::get_embedded_skills_dir;
-    use crate::skill::discover_skills;
-
-    let skills_dir = get_embedded_skills_dir()?;
-    let skills = discover_skills(&skills_dir)?;
-    Ok(skills.len())
-}
-
 /// Count installed skills for a given tap
 fn count_installed_skills(db: &Database, tap_name: &str) -> usize {
     db::get_skills_from_tap(db, tap_name).len()
@@ -246,15 +231,6 @@ fn format_skills_count(installed: usize, available: Option<usize>) -> String {
 /// Get the registry for a tap (uses cache if available, otherwise fetches from remote)
 pub fn get_tap_registry(db: &Database, tap_name: &str) -> Result<TapRegistry> {
     let tap = db::get_tap(db, tap_name).with_context(|| format!("Tap '{}' not found", tap_name))?;
-
-    if tap.is_bundled {
-        // Prefer cached registry if available (populated by tap update)
-        if let Some(ref registry) = tap.cached_registry {
-            return Ok(registry.clone());
-        }
-        // Fallback to local registry for bundled taps without cache
-        return generate_local_registry();
-    }
 
     // Return cached registry if available
     if let Some(ref registry) = tap.cached_registry {
@@ -350,7 +326,6 @@ mod tests {
                 skill: "skill1".to_string(),
                 commit: None,
                 installed_at: Utc::now(),
-                local: false,
                 source_url: None,
                 source_path: None,
             },
@@ -362,7 +337,6 @@ mod tests {
                 skill: "skill2".to_string(),
                 commit: None,
                 installed_at: Utc::now(),
-                local: false,
                 source_url: None,
                 source_path: None,
             },
@@ -374,7 +348,6 @@ mod tests {
                 skill: "skill1".to_string(),
                 commit: None,
                 installed_at: Utc::now(),
-                local: false,
                 source_url: None,
                 source_path: None,
             },

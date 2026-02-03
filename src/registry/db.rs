@@ -56,7 +56,6 @@ fn default_taps() -> Vec<(&'static str, TapInfo)> {
             skills_path: "skills".to_string(),
             updated_at: None,
             is_default: true,
-            is_bundled: false,
             cached_registry: None,
         },
     )]
@@ -69,13 +68,6 @@ fn ensure_default_taps(db: &mut Database) -> bool {
         if !db.taps.contains_key(name) {
             db.taps.insert(name.to_string(), tap);
             changed = true;
-        } else if let Some(existing) = db.taps.get_mut(name) {
-            // Migrate: ensure default tap is no longer marked as bundled
-            // so that its skills are fetched from remote like any other tap
-            if existing.is_bundled {
-                existing.is_bundled = false;
-                changed = true;
-            }
         }
     }
 
@@ -180,34 +172,8 @@ mod tests {
 
         let default_tap = db.taps.get(DEFAULT_TAP_NAME).unwrap();
         assert!(default_tap.is_default);
-        assert!(!default_tap.is_bundled);
 
         // Calling again should return false (no changes)
-        assert!(!ensure_default_taps(&mut db));
-    }
-
-    #[test]
-    fn test_ensure_default_taps_migrates_bundled() {
-        let mut db = Database::default();
-        // Simulate old database with is_bundled=true
-        db.taps.insert(
-            DEFAULT_TAP_NAME.to_string(),
-            TapInfo {
-                url: DEFAULT_TAP_URL.to_string(),
-                skills_path: "skills".to_string(),
-                updated_at: None,
-                is_default: true,
-                is_bundled: true,
-                cached_registry: None,
-            },
-        );
-
-        // Should detect and fix the bundled flag
-        assert!(ensure_default_taps(&mut db));
-        let tap = db.taps.get(DEFAULT_TAP_NAME).unwrap();
-        assert!(!tap.is_bundled);
-
-        // Calling again should return false (no changes needed)
         assert!(!ensure_default_taps(&mut db));
     }
 
@@ -223,7 +189,6 @@ mod tests {
                 skill: "skill".to_string(),
                 commit: None,
                 installed_at: Utc::now(),
-                local: false,
                 source_url: None,
                 source_path: None,
             },
@@ -241,7 +206,6 @@ mod tests {
             skill: "skill".to_string(),
             commit: Some("abc123".to_string()),
             installed_at: Utc::now(),
-            local: false,
             source_url: None,
             source_path: None,
         };
@@ -263,7 +227,6 @@ mod tests {
             skills_path: "skills".to_string(),
             updated_at: None,
             is_default: false,
-            is_bundled: false,
             cached_registry: None,
         };
 
@@ -284,7 +247,6 @@ mod tests {
             skill: "skill1".to_string(),
             commit: None,
             installed_at: Utc::now(),
-            local: false,
             source_url: None,
             source_path: None,
         };
@@ -293,7 +255,6 @@ mod tests {
             skill: "skill2".to_string(),
             commit: None,
             installed_at: Utc::now(),
-            local: false,
             source_url: None,
             source_path: None,
         };
@@ -302,7 +263,6 @@ mod tests {
             skill: "skill3".to_string(),
             commit: None,
             installed_at: Utc::now(),
-            local: false,
             source_url: None,
             source_path: None,
         };

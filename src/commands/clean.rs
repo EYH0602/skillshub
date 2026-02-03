@@ -13,11 +13,6 @@ pub fn clean_cache() -> Result<()> {
     let mut cleared_count = 0;
 
     for (name, tap) in db.taps.iter_mut() {
-        // Skip bundled taps - they don't use cache
-        if tap.is_bundled {
-            continue;
-        }
-
         if tap.cached_registry.is_some() {
             tap.cached_registry = None;
             cleared_count += 1;

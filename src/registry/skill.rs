@@ -11,9 +11,9 @@ use super::github::{download_skill, get_default_branch, get_latest_commit, parse
 use super::models::{InstalledSkill, SkillId};
 use super::tap::get_tap_registry;
 use crate::commands::link_to_agents;
-use crate::paths::{get_embedded_skills_dir, get_skills_install_dir};
+use crate::paths::get_skills_install_dir;
 use crate::skill::discover_skills;
-use crate::util::{copy_dir_recursive, truncate_string};
+use crate::util::truncate_string;
 
 const DESCRIPTION_MAX_LEN: usize = 50;
 
@@ -90,13 +90,7 @@ fn install_skill_internal(full_name: &str) -> Result<bool> {
     let dest = install_dir.join(&skill_id.tap).join(&skill_id.skill);
     std::fs::create_dir_all(&dest)?;
 
-    let (commit, is_local) = if tap.is_bundled {
-        // Install from local/bundled source
-        install_from_local(&skill_id.skill, &dest)?
-    } else {
-        // Install from remote
-        install_from_remote(&tap.url, &skill_entry.path, &dest, requested_commit.as_deref())?
-    };
+    let (commit, _) = install_from_remote(&tap.url, &skill_entry.path, &dest, requested_commit.as_deref())?;
 
     // Record in database
     let installed = InstalledSkill {
@@ -104,9 +98,8 @@ fn install_skill_internal(full_name: &str) -> Result<bool> {
         skill: skill_id.skill.clone(),
         commit,
         installed_at: Utc::now(),
-        local: is_local,
-        source_url: if is_local { None } else { Some(tap.url.clone()) },
-        source_path: if is_local { None } else { Some(skill_entry.path.clone()) },
+        source_url: Some(tap.url.clone()),
+        source_path: Some(skill_entry.path.clone()),
     };
 
     db::add_installed_skill(&mut db, &skill_id.full_name(), installed);
@@ -185,7 +178,6 @@ pub fn add_skill_from_url(url: &str) -> Result<()> {
             skills_path: "skills".to_string(),
             updated_at: Some(Utc::now()),
             is_default: false,
-            is_bundled: false,
             cached_registry: None, // Cache will be populated on next tap update
         };
         db::add_tap(&mut db, &tap_name, tap_info);
@@ -197,7 +189,6 @@ pub fn add_skill_from_url(url: &str) -> Result<()> {
         skill: skill_name.clone(),
         commit: Some(commit_sha.clone()),
         installed_at: Utc::now(),
-        local: false,
         source_url: Some(url.to_string()),
         source_path: Some(skill_path.clone()),
     };
@@ -217,50 +208,6 @@ pub fn add_skill_from_url(url: &str) -> Result<()> {
     link_to_agents()?;
 
     Ok(())
-}
-
-/// Install from local/bundled source
-fn install_from_local(skill_name: &str, dest: &std::path::Path) -> Result<(Option<String>, bool)> {
-    let source_dir = get_embedded_skills_dir()?;
-    let skills = discover_skills(&source_dir)?;
-
-    let skill = skills
-        .iter()
-        .find(|s| s.name == skill_name)
-        .with_context(|| format!("Skill '{}' not found in local source", skill_name))?;
-
-    // Remove dest if it exists (reinstall)
-    if dest.exists() {
-        std::fs::remove_dir_all(dest)?;
-    }
-
-    copy_dir_recursive(&skill.path, dest)?;
-
-    // Get the git commit for this skill's path
-    let commit = get_local_skill_commit(&skill.path);
-
-    Ok((commit, true))
-}
-
-/// Get the last git commit that modified a local skill path
-fn get_local_skill_commit(skill_path: &std::path::Path) -> Option<String> {
-    use std::process::Command;
-
-    // Run git log to get the last commit that touched this path
-    let output = Command::new("git")
-        .args(["log", "-1", "--format=%h", "--"])
-        .arg(skill_path)
-        .output()
-        .ok()?;
-
-    if output.status.success() {
-        let commit = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if !commit.is_empty() {
-            return Some(commit);
-        }
-    }
-
-    None
 }
 
 /// Install from remote tap
@@ -357,14 +304,6 @@ pub fn update_skill(full_name: Option<&str>) -> Result<()> {
             }
         };
 
-        // Skip local skills only if the tap is still bundled (truly local-only)
-        // Otherwise, the skill was previously local but the tap is now remote —
-        // fall through to update it from remote
-        if installed.local && tap.is_bundled {
-            println!("  {} {} (local, skipped)", "○".yellow(), skill_name);
-            continue;
-        }
-
         // Get latest commit
         let github_url = match parse_github_url(&tap.url) {
             Ok(u) => u,
@@ -426,12 +365,6 @@ pub fn update_skill(full_name: Option<&str>) -> Result<()> {
                 if let Some(skill) = db.installed.get_mut(&skill_name) {
                     skill.commit = new_commit;
                     skill.installed_at = Utc::now();
-                    // Migrate local skills to remote tracking
-                    if skill.local {
-                        skill.local = false;
-                        skill.source_url = Some(tap.url.clone());
-                        skill.source_path = Some(skill_entry.path.clone());
-                    }
                 }
 
                 println!(
