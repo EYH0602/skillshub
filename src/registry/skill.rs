@@ -349,12 +349,6 @@ pub fn update_skill(full_name: Option<&str>) -> Result<()> {
     for skill_name in skills_to_update {
         let installed = db.installed.get(&skill_name).unwrap().clone();
 
-        // Skip local skills (no remote to update from)
-        if installed.local {
-            println!("  {} {} (local, skipped)", "○".yellow(), skill_name);
-            continue;
-        }
-
         let tap = match db::get_tap(&db, &installed.tap) {
             Some(t) => t.clone(),
             None => {
@@ -362,6 +356,14 @@ pub fn update_skill(full_name: Option<&str>) -> Result<()> {
                 continue;
             }
         };
+
+        // Skip local skills only if the tap is still bundled (truly local-only)
+        // Otherwise, the skill was previously local but the tap is now remote —
+        // fall through to update it from remote
+        if installed.local && tap.is_bundled {
+            println!("  {} {} (local, skipped)", "○".yellow(), skill_name);
+            continue;
+        }
 
         // Get latest commit
         let github_url = match parse_github_url(&tap.url) {
@@ -424,6 +426,12 @@ pub fn update_skill(full_name: Option<&str>) -> Result<()> {
                 if let Some(skill) = db.installed.get_mut(&skill_name) {
                     skill.commit = new_commit;
                     skill.installed_at = Utc::now();
+                    // Migrate local skills to remote tracking
+                    if skill.local {
+                        skill.local = false;
+                        skill.source_url = Some(tap.url.clone());
+                        skill.source_path = Some(skill_entry.path.clone());
+                    }
                 }
 
                 println!(

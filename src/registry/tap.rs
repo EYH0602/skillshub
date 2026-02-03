@@ -188,11 +188,6 @@ pub fn update_tap(name: Option<&str>) -> Result<()> {
     for tap_name in taps_to_update {
         let tap = db.taps.get(&tap_name).unwrap().clone();
 
-        if tap.is_default {
-            println!("  {} {} (default tap, skipped)", "○".yellow(), tap_name);
-            continue;
-        }
-
         print!("  {} Updating {}...", "○".yellow(), tap_name);
 
         match update_single_tap(&mut db, &tap_name, &tap) {
@@ -253,7 +248,11 @@ pub fn get_tap_registry(db: &Database, tap_name: &str) -> Result<TapRegistry> {
     let tap = db::get_tap(db, tap_name).with_context(|| format!("Tap '{}' not found", tap_name))?;
 
     if tap.is_bundled {
-        // Generate registry from local skills
+        // Prefer cached registry if available (populated by tap update)
+        if let Some(ref registry) = tap.cached_registry {
+            return Ok(registry.clone());
+        }
+        // Fallback to local registry for bundled taps without cache
         return generate_local_registry();
     }
 
@@ -266,7 +265,17 @@ pub fn get_tap_registry(db: &Database, tap_name: &str) -> Result<TapRegistry> {
     // This shouldn't normally happen since we cache on add_tap and update_tap,
     // but handles edge cases like database migration from older versions
     let github_url = parse_github_url(&tap.url)?;
-    discover_skills_from_repo(&github_url, tap_name)
+    match discover_skills_from_repo(&github_url, tap_name) {
+        Ok(registry) => Ok(registry),
+        Err(e) => {
+            // For the default tap, fall back to local registry if remote fails
+            // (e.g., no network on first run)
+            if tap.is_default {
+                return generate_local_registry();
+            }
+            Err(e)
+        }
+    }
 }
 
 /// Generate a registry from local/bundled skills
