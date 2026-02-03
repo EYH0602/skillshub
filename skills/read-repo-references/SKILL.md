@@ -1,6 +1,6 @@
 ---
 name: read-repo-references
-description: Learn from reference materials and prior art in the references/ directory
+description: Learn from reference materials and prior art in the .references/ directory
 ---
 
 # Read Repo References
@@ -15,10 +15,10 @@ Use this skill when you need inspiration or guidance from prior art and referenc
 
 ## Reference Structure
 
-References live in `references/<name>/` with this format:
+References live in `.references/<name>/` with this format:
 
 ```
-references/
+.references/
 └── <reference-name>/
     ├── REF.md              # Required: metadata and description
     └── [local files]       # Optional: PDFs, markdown, code samples
@@ -49,12 +49,12 @@ Notes on key patterns, architecture, and relevance...
 
 1. **List available references**:
    ```bash
-   ls references/
+   ls .references/
    ```
 
 2. **Read a reference**:
    ```bash
-   cat references/<name>/REF.md
+   cat .references/<name>/REF.md
    ```
 
 3. **For link-type references**: The REF.md contains the URL and notes about what to look for. Fetch specific files from the URL as needed.
