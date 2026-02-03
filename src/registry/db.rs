@@ -56,8 +56,7 @@ fn default_taps() -> Vec<(&'static str, TapInfo)> {
             skills_path: "skills".to_string(),
             updated_at: None,
             is_default: true,
-            is_bundled: true,
-            cached_registry: None, // Bundled taps don't need cache (generated from local files)
+            cached_registry: None,
         },
     )]
 }
@@ -169,11 +168,10 @@ mod tests {
         let mut db = Database::default();
         assert!(ensure_default_taps(&mut db));
         assert!(db.taps.contains_key(DEFAULT_TAP_NAME));
-        assert_eq!(db.taps.len(), 1); // Only bundled tap
+        assert_eq!(db.taps.len(), 1);
 
-        let bundled = db.taps.get(DEFAULT_TAP_NAME).unwrap();
-        assert!(bundled.is_default);
-        assert!(bundled.is_bundled);
+        let default_tap = db.taps.get(DEFAULT_TAP_NAME).unwrap();
+        assert!(default_tap.is_default);
 
         // Calling again should return false (no changes)
         assert!(!ensure_default_taps(&mut db));
@@ -191,7 +189,6 @@ mod tests {
                 skill: "skill".to_string(),
                 commit: None,
                 installed_at: Utc::now(),
-                local: false,
                 source_url: None,
                 source_path: None,
             },
@@ -209,7 +206,6 @@ mod tests {
             skill: "skill".to_string(),
             commit: Some("abc123".to_string()),
             installed_at: Utc::now(),
-            local: false,
             source_url: None,
             source_path: None,
         };
@@ -231,7 +227,6 @@ mod tests {
             skills_path: "skills".to_string(),
             updated_at: None,
             is_default: false,
-            is_bundled: false,
             cached_registry: None,
         };
 
@@ -252,7 +247,6 @@ mod tests {
             skill: "skill1".to_string(),
             commit: None,
             installed_at: Utc::now(),
-            local: false,
             source_url: None,
             source_path: None,
         };
@@ -261,7 +255,6 @@ mod tests {
             skill: "skill2".to_string(),
             commit: None,
             installed_at: Utc::now(),
-            local: false,
             source_url: None,
             source_path: None,
         };
@@ -270,7 +263,6 @@ mod tests {
             skill: "skill3".to_string(),
             commit: None,
             installed_at: Utc::now(),
-            local: false,
             source_url: None,
             source_path: None,
         };

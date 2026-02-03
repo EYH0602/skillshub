@@ -75,7 +75,6 @@ pub fn migrate_old_installations() -> Result<()> {
                 skill: skill.name.clone(),
                 commit: None,
                 installed_at: Utc::now(),
-                local: true,
                 source_url: None,
                 source_path: None,
             };
