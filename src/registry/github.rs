@@ -1,11 +1,12 @@
 use anyhow::{Context, Result};
 use flate2::read::GzDecoder;
-use reqwest::blocking::{Client, RequestBuilder};
+use reqwest::blocking::{Client, RequestBuilder, Response};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;
 use std::io::Cursor;
 use std::path::Path;
+use std::time::{Duration, SystemTime};
 use tar::Archive;
 
 use super::models::{GitHubUrl, SkillEntry, TapRegistry};
@@ -13,6 +14,227 @@ use crate::skill::SkillMetadata;
 
 /// User agent for API requests
 const USER_AGENT: &str = "skillshub";
+
+/// Maximum number of retries for transient errors
+const MAX_RETRIES: u32 = 5;
+
+/// Initial backoff duration in milliseconds (overridden in tests)
+#[cfg(not(test))]
+const INITIAL_BACKOFF_MS: u64 = 1000;
+#[cfg(test)]
+const INITIAL_BACKOFF_MS: u64 = 10;
+
+/// Maximum backoff duration in milliseconds
+const MAX_BACKOFF_MS: u64 = 60_000;
+
+/// Maximum time to wait for a rate limit reset (seconds)
+const MAX_RATE_LIMIT_WAIT_SECS: u64 = 300;
+
+/// Parsed rate limit information from GitHub response headers
+struct RateLimitInfo {
+    remaining: Option<u64>,
+    reset: Option<i64>,
+}
+
+impl RateLimitInfo {
+    /// Parse rate limit headers from a response
+    fn from_response(resp: &Response) -> Self {
+        let remaining = resp
+            .headers()
+            .get("X-RateLimit-Remaining")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u64>().ok());
+
+        let reset = resp
+            .headers()
+            .get("X-RateLimit-Reset")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<i64>().ok());
+
+        Self { remaining, reset }
+    }
+
+    /// Compute the duration to wait until the rate limit resets
+    fn wait_duration(&self) -> Option<Duration> {
+        self.reset.and_then(|reset_ts| {
+            let now = chrono::Utc::now().timestamp();
+            let wait = reset_ts - now;
+            if wait > 0 {
+                Some(Duration::from_secs(wait as u64))
+            } else {
+                // Reset time already passed, retry immediately
+                Some(Duration::from_secs(1))
+            }
+        })
+    }
+}
+
+/// Compute exponential backoff duration for a given attempt (1-based)
+fn backoff_duration(attempt: u32) -> Duration {
+    let base_ms = INITIAL_BACKOFF_MS.saturating_mul(1u64 << (attempt.saturating_sub(1)));
+    let jitter = simple_jitter_ms();
+    let total_ms = base_ms.saturating_add(jitter).min(MAX_BACKOFF_MS);
+    Duration::from_millis(total_ms)
+}
+
+/// Generate a simple jitter value (0-499ms) without requiring a random number crate
+fn simple_jitter_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos() as u64 % 500)
+        .unwrap_or(0)
+}
+
+/// Determine how long to wait before retrying based on response headers or backoff
+fn retry_after_from_response(resp: &Response, attempt: u32) -> Duration {
+    // Check Retry-After header first
+    if let Some(retry_after) = resp
+        .headers()
+        .get("Retry-After")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok())
+    {
+        return Duration::from_secs(retry_after);
+    }
+
+    // Check X-RateLimit-Reset header
+    let rate_info = RateLimitInfo::from_response(resp);
+    if let Some(wait) = rate_info.wait_duration() {
+        return wait;
+    }
+
+    // Fall back to exponential backoff
+    backoff_duration(attempt)
+}
+
+/// Print a rate limit wait message to stderr
+fn print_rate_limit_wait(reason: &str, wait_secs: u64, attempt: u32) {
+    eprint!(
+        "  {} Waiting {}s before retrying (attempt {}/{})...",
+        reason, wait_secs, attempt, MAX_RETRIES
+    );
+    if std::env::var("GITHUB_TOKEN").is_err() {
+        eprint!("\n  Tip: Set GITHUB_TOKEN for higher rate limits (5000/hour vs 60/hour).");
+    }
+    eprintln!();
+}
+
+/// Send an HTTP request with retry logic for rate limits, server errors, and network errors.
+///
+/// The `build_request` closure is called on each attempt since `RequestBuilder` is consumed
+/// on `.send()`.
+fn send_with_retry<F>(build_request: F, url: &str) -> Result<Response>
+where
+    F: Fn() -> RequestBuilder,
+{
+    let mut attempt = 0u32;
+
+    loop {
+        attempt += 1;
+
+        let result = build_request().send();
+
+        match result {
+            Ok(resp) => {
+                let status = resp.status();
+
+                // 429 Too Many Requests
+                if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                    if attempt >= MAX_RETRIES {
+                        anyhow::bail!("Rate limited (HTTP 429) after {} retries for {}", MAX_RETRIES, url);
+                    }
+                    let wait = retry_after_from_response(&resp, attempt);
+                    let wait_secs = wait.as_secs();
+                    print_rate_limit_wait(&format!("Rate limited (429)."), wait_secs, attempt);
+                    std::thread::sleep(wait);
+                    continue;
+                }
+
+                // 403 with rate limit exhausted
+                if status == reqwest::StatusCode::FORBIDDEN {
+                    let rate_info = RateLimitInfo::from_response(&resp);
+                    if rate_info.remaining == Some(0) {
+                        if attempt >= MAX_RETRIES {
+                            anyhow::bail!(
+                                "Rate limit exceeded (HTTP 403) after {} retries for {}",
+                                MAX_RETRIES,
+                                url
+                            );
+                        }
+                        if let Some(wait) = rate_info.wait_duration() {
+                            if wait.as_secs() > MAX_RATE_LIMIT_WAIT_SECS {
+                                anyhow::bail!(
+                                    "Rate limit reset is {}s away (>{} max). Set GITHUB_TOKEN for higher limits.",
+                                    wait.as_secs(),
+                                    MAX_RATE_LIMIT_WAIT_SECS
+                                );
+                            }
+                            print_rate_limit_wait(&format!("Rate limit exceeded (403)."), wait.as_secs(), attempt);
+                            std::thread::sleep(wait);
+                            continue;
+                        }
+                        // No reset header — fall through to return the 403
+                    }
+                    // Regular 403 (not rate limit) — return immediately
+                    return Ok(resp);
+                }
+
+                // 5xx server errors
+                if status.is_server_error() {
+                    if attempt >= MAX_RETRIES {
+                        anyhow::bail!(
+                            "Server error (HTTP {}) after {} retries for {}",
+                            status.as_u16(),
+                            MAX_RETRIES,
+                            url
+                        );
+                    }
+                    let wait = backoff_duration(attempt);
+                    eprintln!(
+                        "  Server error (HTTP {}). Retrying in {}s... (attempt {}/{})",
+                        status.as_u16(),
+                        wait.as_secs(),
+                        attempt,
+                        MAX_RETRIES
+                    );
+                    std::thread::sleep(wait);
+                    continue;
+                }
+
+                // 200 with remaining=0: proactive warning
+                if status.is_success() {
+                    let rate_info = RateLimitInfo::from_response(&resp);
+                    if rate_info.remaining == Some(0) {
+                        if let Some(wait) = rate_info.wait_duration() {
+                            eprintln!(
+                                "  Warning: Rate limit exhausted. Next request will wait {}s for reset.",
+                                wait.as_secs()
+                            );
+                        }
+                    }
+                }
+
+                // All other responses (200, 404, other 4xx) — return for caller to handle
+                return Ok(resp);
+            }
+            Err(e) => {
+                // Network errors
+                if attempt >= MAX_RETRIES {
+                    anyhow::bail!("Network error after {} retries for {}: {}", MAX_RETRIES, url, e);
+                }
+                let wait = backoff_duration(attempt);
+                eprintln!(
+                    "  Network error: {}. Retrying in {}s... (attempt {}/{})",
+                    e,
+                    wait.as_secs(),
+                    attempt,
+                    MAX_RETRIES
+                );
+                std::thread::sleep(wait);
+            }
+        }
+    }
+}
 
 /// Build an HTTP client with GitHub token if available
 fn build_client() -> Result<Client> {
@@ -57,9 +279,7 @@ pub fn get_default_branch(owner: &str, repo: &str) -> Result<String> {
     let api_base = std::env::var("SKILLSHUB_GITHUB_API_BASE").unwrap_or_else(|_| "https://api.github.com".to_string());
     let url = format!("{}/repos/{}/{}", api_base, owner, repo);
 
-    let response = with_auth(client.get(&url))
-        .send()
-        .with_context(|| format!("Failed to fetch repo info from {}", url))?;
+    let response = send_with_retry(|| with_auth(client.get(&url)), &url)?;
 
     let status = response.status();
     if !status.is_success() {
@@ -201,9 +421,7 @@ pub fn discover_skills_from_repo(github_url: &GitHubUrl, tap_name: &str) -> Resu
     // Fetch the full repo tree with recursive=1
     let tree_url = format!("{}/git/trees/{}?recursive=1", github_url.api_url(), branch);
 
-    let response = with_auth(client.get(&tree_url))
-        .send()
-        .with_context(|| format!("Failed to fetch repo tree from {}", tree_url))?;
+    let response = send_with_retry(|| with_auth(client.get(&tree_url)), &tree_url)?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -240,7 +458,7 @@ pub fn discover_skills_from_repo(github_url: &GitHubUrl, tap_name: &str) -> Resu
         };
 
         // Note: raw.githubusercontent.com doesn't need auth, but we add it anyway
-        match with_auth(client.get(&skill_md_url)).send() {
+        match send_with_retry(|| with_auth(client.get(&skill_md_url)), &skill_md_url) {
             Ok(resp) if resp.status().is_success() => {
                 if let Ok(content) = resp.text() {
                     if let Some((name, description)) = parse_skill_md_content(&content) {
@@ -308,9 +526,7 @@ pub fn get_latest_commit(github_url: &GitHubUrl, path: Option<&str>, resolved_br
         url.push_str(&format!("&path={}", p));
     }
 
-    let response = with_auth(client.get(&url))
-        .send()
-        .with_context(|| format!("Failed to fetch commits from {}", url))?;
+    let response = send_with_retry(|| with_auth(client.get(&url)), &url)?;
 
     if !response.status().is_success() {
         anyhow::bail!("Failed to fetch commits: HTTP {}", response.status());
@@ -341,9 +557,7 @@ pub fn download_skill(github_url: &GitHubUrl, skill_path: &str, dest: &Path, com
 
     // Download tarball
     let tarball_url = github_url.tarball_url(git_ref);
-    let response = with_auth(client.get(&tarball_url))
-        .send()
-        .with_context(|| format!("Failed to download from {}", tarball_url))?;
+    let response = send_with_retry(|| with_auth(client.get(&tarball_url)), &tarball_url)?;
 
     if !response.status().is_success() {
         anyhow::bail!(
@@ -666,5 +880,324 @@ name: minimal-skill
         let tree = vec![tree_entry("a/b/c/SKILL.md", "blob")];
         let paths = extract_skill_paths(&tree);
         assert_eq!(paths, vec!["a/b/c"]);
+    }
+
+    // --- Rate limit and retry tests ---
+
+    #[test]
+    fn test_backoff_duration_exponential() {
+        // With INITIAL_BACKOFF_MS=10 in test mode, backoff should grow exponentially
+        let d1 = backoff_duration(1);
+        let d2 = backoff_duration(2);
+        let d3 = backoff_duration(3);
+
+        // attempt 1: base=10ms, attempt 2: base=20ms, attempt 3: base=40ms
+        // Plus jitter (0-499ms), so just check ordering and reasonable bounds
+        assert!(
+            d1.as_millis() >= 10,
+            "attempt 1 should be >= 10ms, got {}ms",
+            d1.as_millis()
+        );
+        assert!(
+            d2.as_millis() >= 20,
+            "attempt 2 should be >= 20ms, got {}ms",
+            d2.as_millis()
+        );
+        assert!(
+            d3.as_millis() >= 40,
+            "attempt 3 should be >= 40ms, got {}ms",
+            d3.as_millis()
+        );
+    }
+
+    #[test]
+    fn test_backoff_capped_at_max() {
+        // Very high attempt number should still be capped at MAX_BACKOFF_MS
+        let d = backoff_duration(30);
+        assert!(
+            d.as_millis() <= MAX_BACKOFF_MS as u128,
+            "backoff should be capped at {}ms, got {}ms",
+            MAX_BACKOFF_MS,
+            d.as_millis()
+        );
+    }
+
+    #[test]
+    fn test_simple_jitter_ms_in_range() {
+        let jitter = simple_jitter_ms();
+        assert!(jitter < 500, "jitter should be < 500, got {}", jitter);
+    }
+
+    /// Helper: start a tokio runtime, start a wiremock server, and return its URI.
+    /// The closure receives the mock server to set up mocks, then we run blocking code.
+    fn with_mock_server<F, G, R>(setup: F, test: G) -> R
+    where
+        F: FnOnce(&wiremock::MockServer) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + '_>>,
+        G: FnOnce(String) -> R,
+    {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let server = rt.block_on(wiremock::MockServer::start());
+        rt.block_on(setup(&server));
+        let url = server.uri();
+        test(url)
+    }
+
+    #[test]
+    fn test_send_with_retry_success() {
+        with_mock_server(
+            |server| {
+                Box::pin(async move {
+                    wiremock::Mock::given(wiremock::matchers::method("GET"))
+                        .and(wiremock::matchers::path("/test"))
+                        .respond_with(wiremock::ResponseTemplate::new(200).set_body_string("ok"))
+                        .mount(server)
+                        .await;
+                })
+            },
+            |base_url| {
+                let url = format!("{}/test", base_url);
+                let client = build_client().unwrap();
+                let result = send_with_retry(|| client.get(&url), &url);
+                assert!(result.is_ok());
+                let resp = result.unwrap();
+                assert_eq!(resp.status(), 200);
+                assert_eq!(resp.text().unwrap(), "ok");
+            },
+        );
+    }
+
+    #[test]
+    fn test_retry_on_server_error() {
+        // Use an atomic counter to track calls and return 500 on first, 200 on second
+        use std::sync::atomic::{AtomicU32, Ordering};
+        use std::sync::Arc;
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let server = rt.block_on(wiremock::MockServer::start());
+
+        let call_count = Arc::new(AtomicU32::new(0));
+        let counter = call_count.clone();
+
+        rt.block_on(async {
+            // First response: 500
+            wiremock::Mock::given(wiremock::matchers::method("GET"))
+                .and(wiremock::matchers::path("/test"))
+                .respond_with(wiremock::ResponseTemplate::new(500))
+                .up_to_n_times(1)
+                .mount(&server)
+                .await;
+
+            // Second response: 200
+            wiremock::Mock::given(wiremock::matchers::method("GET"))
+                .and(wiremock::matchers::path("/test"))
+                .respond_with(wiremock::ResponseTemplate::new(200).set_body_string("recovered"))
+                .mount(&server)
+                .await;
+        });
+
+        let url = format!("{}/test", server.uri());
+        let client = build_client().unwrap();
+        let result = send_with_retry(
+            || {
+                counter.fetch_add(1, Ordering::SeqCst);
+                client.get(&url)
+            },
+            &url,
+        );
+
+        assert!(result.is_ok(), "should succeed after retry");
+        let resp = result.unwrap();
+        assert_eq!(resp.status(), 200);
+        assert!(
+            call_count.load(Ordering::SeqCst) >= 2,
+            "should have retried at least once"
+        );
+    }
+
+    #[test]
+    fn test_retry_on_429() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let server = rt.block_on(wiremock::MockServer::start());
+
+        rt.block_on(async {
+            // First response: 429 with Retry-After
+            wiremock::Mock::given(wiremock::matchers::method("GET"))
+                .and(wiremock::matchers::path("/test"))
+                .respond_with(
+                    wiremock::ResponseTemplate::new(429)
+                        .insert_header("Retry-After", "0")
+                        .set_body_string("rate limited"),
+                )
+                .up_to_n_times(1)
+                .mount(&server)
+                .await;
+
+            // Second response: 200
+            wiremock::Mock::given(wiremock::matchers::method("GET"))
+                .and(wiremock::matchers::path("/test"))
+                .respond_with(wiremock::ResponseTemplate::new(200).set_body_string("ok"))
+                .mount(&server)
+                .await;
+        });
+
+        let url = format!("{}/test", server.uri());
+        let client = build_client().unwrap();
+        let result = send_with_retry(|| client.get(&url), &url);
+
+        assert!(result.is_ok(), "should succeed after 429 retry");
+        assert_eq!(result.unwrap().status(), 200);
+    }
+
+    #[test]
+    fn test_retry_on_403_rate_limit() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let server = rt.block_on(wiremock::MockServer::start());
+        let reset_ts = (chrono::Utc::now().timestamp() + 1).to_string();
+
+        rt.block_on(async {
+            // First response: 403 with X-RateLimit-Remaining: 0
+            wiremock::Mock::given(wiremock::matchers::method("GET"))
+                .and(wiremock::matchers::path("/test"))
+                .respond_with(
+                    wiremock::ResponseTemplate::new(403)
+                        .insert_header("X-RateLimit-Remaining", "0")
+                        .insert_header("X-RateLimit-Reset", &reset_ts)
+                        .set_body_string("rate limited"),
+                )
+                .up_to_n_times(1)
+                .mount(&server)
+                .await;
+
+            // Second response: 200
+            wiremock::Mock::given(wiremock::matchers::method("GET"))
+                .and(wiremock::matchers::path("/test"))
+                .respond_with(wiremock::ResponseTemplate::new(200).set_body_string("ok"))
+                .mount(&server)
+                .await;
+        });
+
+        let url = format!("{}/test", server.uri());
+        let client = build_client().unwrap();
+        let result = send_with_retry(|| client.get(&url), &url);
+
+        assert!(result.is_ok(), "should succeed after 403 rate limit retry");
+        assert_eq!(result.unwrap().status(), 200);
+    }
+
+    #[test]
+    fn test_no_retry_on_404() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        use std::sync::Arc;
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let server = rt.block_on(wiremock::MockServer::start());
+
+        rt.block_on(async {
+            wiremock::Mock::given(wiremock::matchers::method("GET"))
+                .and(wiremock::matchers::path("/test"))
+                .respond_with(wiremock::ResponseTemplate::new(404))
+                .mount(&server)
+                .await;
+        });
+
+        let call_count = Arc::new(AtomicU32::new(0));
+        let counter = call_count.clone();
+
+        let url = format!("{}/test", server.uri());
+        let client = build_client().unwrap();
+        let result = send_with_retry(
+            || {
+                counter.fetch_add(1, Ordering::SeqCst);
+                client.get(&url)
+            },
+            &url,
+        );
+
+        assert!(result.is_ok(), "404 should be returned, not an error");
+        assert_eq!(result.unwrap().status(), 404);
+        assert_eq!(call_count.load(Ordering::SeqCst), 1, "should NOT retry on 404");
+    }
+
+    #[test]
+    fn test_no_retry_on_regular_403() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        use std::sync::Arc;
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let server = rt.block_on(wiremock::MockServer::start());
+
+        rt.block_on(async {
+            // 403 without rate limit headers — should not retry
+            wiremock::Mock::given(wiremock::matchers::method("GET"))
+                .and(wiremock::matchers::path("/test"))
+                .respond_with(wiremock::ResponseTemplate::new(403).set_body_string("forbidden"))
+                .mount(&server)
+                .await;
+        });
+
+        let call_count = Arc::new(AtomicU32::new(0));
+        let counter = call_count.clone();
+
+        let url = format!("{}/test", server.uri());
+        let client = build_client().unwrap();
+        let result = send_with_retry(
+            || {
+                counter.fetch_add(1, Ordering::SeqCst);
+                client.get(&url)
+            },
+            &url,
+        );
+
+        assert!(result.is_ok(), "regular 403 should be returned");
+        assert_eq!(result.unwrap().status(), 403);
+        assert_eq!(call_count.load(Ordering::SeqCst), 1, "should NOT retry on regular 403");
+    }
+
+    #[test]
+    fn test_gives_up_after_max_retries() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let server = rt.block_on(wiremock::MockServer::start());
+
+        rt.block_on(async {
+            // Always return 500
+            wiremock::Mock::given(wiremock::matchers::method("GET"))
+                .and(wiremock::matchers::path("/test"))
+                .respond_with(wiremock::ResponseTemplate::new(500))
+                .mount(&server)
+                .await;
+        });
+
+        let url = format!("{}/test", server.uri());
+        let client = build_client().unwrap();
+        let result = send_with_retry(|| client.get(&url), &url);
+
+        assert!(result.is_err(), "should fail after max retries");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("after 5 retries"),
+            "error should mention retry count: {}",
+            err_msg
+        );
     }
 }
