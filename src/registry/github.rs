@@ -56,14 +56,14 @@ impl RateLimitInfo {
 
     /// Compute the duration to wait until the rate limit resets
     fn wait_duration(&self) -> Option<Duration> {
-        self.reset.and_then(|reset_ts| {
+        self.reset.map(|reset_ts| {
             let now = chrono::Utc::now().timestamp();
             let wait = reset_ts - now;
             if wait > 0 {
-                Some(Duration::from_secs(wait as u64))
+                Duration::from_secs(wait as u64)
             } else {
                 // Reset time already passed, retry immediately
-                Some(Duration::from_secs(1))
+                Duration::from_secs(1)
             }
         })
     }
@@ -145,7 +145,7 @@ where
                     }
                     let wait = retry_after_from_response(&resp, attempt);
                     let wait_secs = wait.as_secs();
-                    print_rate_limit_wait(&format!("Rate limited (429)."), wait_secs, attempt);
+                    print_rate_limit_wait("Rate limited (429).", wait_secs, attempt);
                     std::thread::sleep(wait);
                     continue;
                 }
@@ -169,7 +169,7 @@ where
                                     MAX_RATE_LIMIT_WAIT_SECS
                                 );
                             }
-                            print_rate_limit_wait(&format!("Rate limit exceeded (403)."), wait.as_secs(), attempt);
+                            print_rate_limit_wait("Rate limit exceeded (403).", wait.as_secs(), attempt);
                             std::thread::sleep(wait);
                             continue;
                         }
