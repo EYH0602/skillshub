@@ -77,7 +77,12 @@ fn install_skill_internal(full_name: &str) -> Result<bool> {
         .clone();
 
     // Get registry to verify skill exists
-    let registry = get_tap_registry(&db, &skill_id.tap)?;
+    let registry = get_tap_registry(&db, &skill_id.tap)?.with_context(|| {
+        format!(
+            "No cached registry for tap '{}'. Run 'skillshub tap update {}' first.",
+            skill_id.tap, skill_id.tap
+        )
+    })?;
     let skill_entry = registry.skills.get(&skill_id.skill).with_context(|| {
         format!(
             "Skill '{}' not found in tap '{}'. Run 'skillshub search {}' to find it.",
@@ -314,7 +319,15 @@ pub fn update_skill(full_name: Option<&str>) -> Result<()> {
         };
 
         let registry = match get_tap_registry(&db, &installed.tap) {
-            Ok(r) => r,
+            Ok(Some(r)) => r,
+            Ok(None) => {
+                println!(
+                    "  {} {} (no cached registry, run 'skillshub tap update')",
+                    "✗".red(),
+                    skill_name
+                );
+                continue;
+            }
             Err(e) => {
                 println!("  {} {} ({})", "✗".red(), skill_name, e);
                 continue;
@@ -397,9 +410,14 @@ pub fn list_skills() -> Result<()> {
     let mut seen_skills: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     // Collect skills from all taps (available skills)
+    let mut uncached_taps: Vec<String> = Vec::new();
     for tap_name in db.taps.keys() {
         let registry = match get_tap_registry(&db, tap_name) {
-            Ok(r) => r,
+            Ok(Some(r)) => r,
+            Ok(None) => {
+                uncached_taps.push(tap_name.clone());
+                continue;
+            }
             Err(_) => continue,
         };
 
@@ -484,6 +502,15 @@ pub fn list_skills() -> Result<()> {
         total_count
     );
 
+    if !uncached_taps.is_empty() {
+        println!(
+            "\n{} {} tap(s) have no cached registry: {}.\n  Run 'skillshub tap update' to fetch the full registry.",
+            "Note:".yellow().bold(),
+            uncached_taps.len(),
+            uncached_taps.join(", ")
+        );
+    }
+
     Ok(())
 }
 
@@ -501,8 +528,8 @@ pub fn search_skills(query: &str) -> Result<()> {
 
     for tap_name in db.taps.keys() {
         let registry = match get_tap_registry(&db, tap_name) {
-            Ok(r) => r,
-            Err(_) => continue,
+            Ok(Some(r)) => r,
+            Ok(None) | Err(_) => continue,
         };
 
         for (skill_name, entry) in &registry.skills {
@@ -557,6 +584,7 @@ pub fn show_skill_info(full_name: &str) -> Result<()> {
     // Try to get info from tap registry first
     let tap_entry = db::get_tap(&db, &skill_id.tap)
         .and_then(|_| get_tap_registry(&db, &skill_id.tap).ok())
+        .and_then(|opt| opt)
         .and_then(|r| r.skills.get(&skill_id.skill).cloned());
 
     // If not in tap registry, check if it's installed (directly added skill)
@@ -699,8 +727,14 @@ pub fn install_all_from_tap(tap_name: &str) -> Result<()> {
 
 /// Internal helper to install all skills from a tap (used by both install_all and install_all_from_tap)
 fn install_all_from_tap_internal(db: &super::models::Database, tap_name: &str) -> Result<usize> {
-    let registry =
-        get_tap_registry(db, tap_name).with_context(|| format!("Failed to get registry for tap '{}'", tap_name))?;
+    let registry = get_tap_registry(db, tap_name)
+        .with_context(|| format!("Failed to get registry for tap '{}'", tap_name))?
+        .with_context(|| {
+            format!(
+                "No cached registry for tap '{}'. Run 'skillshub tap update {}' first.",
+                tap_name, tap_name
+            )
+        })?;
 
     if registry.skills.is_empty() {
         println!("No skills available in tap '{}'.", tap_name);

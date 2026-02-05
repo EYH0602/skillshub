@@ -135,7 +135,10 @@ pub fn list_taps() -> Result<()> {
 
     for (name, tap) in &db.taps {
         let installed_count = count_installed_skills(&db, name);
-        let available_count = get_tap_registry(&db, name).ok().map(|registry| registry.skills.len());
+        let available_count = get_tap_registry(&db, name)
+            .ok()
+            .and_then(|opt| opt)
+            .map(|registry| registry.skills.len());
         let skills_count = format_skills_count(installed_count, available_count);
 
         rows.push(TapRow {
@@ -228,30 +231,25 @@ fn format_skills_count(installed: usize, available: Option<usize>) -> String {
     format!("{}/{}", installed, available_display)
 }
 
-/// Get the registry for a tap (uses cache if available, otherwise fetches from remote)
-pub fn get_tap_registry(db: &Database, tap_name: &str) -> Result<TapRegistry> {
+/// Get the registry for a tap (uses cache only, never fetches from remote).
+///
+/// If the cache is empty, falls back to local bundled skills for the default tap,
+/// or returns `None` for non-default taps. Use `tap update` to populate the cache.
+pub fn get_tap_registry(db: &Database, tap_name: &str) -> Result<Option<TapRegistry>> {
     let tap = db::get_tap(db, tap_name).with_context(|| format!("Tap '{}' not found", tap_name))?;
 
     // Return cached registry if available
     if let Some(ref registry) = tap.cached_registry {
-        return Ok(registry.clone());
+        return Ok(Some(registry.clone()));
     }
 
-    // No cache available, fetch from remote
-    // This shouldn't normally happen since we cache on add_tap and update_tap,
-    // but handles edge cases like database migration from older versions
-    let github_url = parse_github_url(&tap.url)?;
-    match discover_skills_from_repo(&github_url, tap_name) {
-        Ok(registry) => Ok(registry),
-        Err(e) => {
-            // For the default tap, fall back to local registry if remote fails
-            // (e.g., no network on first run)
-            if tap.is_default {
-                return generate_local_registry();
-            }
-            Err(e)
-        }
+    // No cache available — use local bundled skills for the default tap,
+    // return None for non-default taps (user should run `tap update`)
+    if tap.is_default {
+        return Ok(Some(generate_local_registry()?));
     }
+
+    Ok(None)
 }
 
 /// Generate a registry from local/bundled skills
