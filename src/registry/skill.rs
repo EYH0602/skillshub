@@ -671,26 +671,21 @@ pub fn show_skill_info(full_name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Install all skills from default taps
+/// Install all skills from all added taps
 pub fn install_all() -> Result<()> {
     let db = db::init_db()?;
 
-    let mut default_taps: Vec<String> = db
-        .taps
-        .iter()
-        .filter(|(_, tap)| tap.is_default)
-        .map(|(name, _)| name.clone())
-        .collect();
-    default_taps.sort();
+    let mut all_taps: Vec<String> = db.taps.keys().cloned().collect();
+    all_taps.sort();
 
-    if default_taps.is_empty() {
-        println!("No default taps configured.");
+    if all_taps.is_empty() {
+        println!("No taps configured. Add one with 'skillshub tap add <url>'.");
         return Ok(());
     }
 
     let mut installed_count = 0;
 
-    for tap_name in default_taps {
+    for tap_name in all_taps {
         installed_count += install_all_from_tap_internal(&db, &tap_name)?;
     }
 

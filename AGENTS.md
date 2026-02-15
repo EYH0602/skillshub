@@ -98,7 +98,7 @@ skillshub install <owner/repo/skill>[@commit]  # Install a skill
 skillshub uninstall <owner/repo/skill>      # Remove installed skill
 skillshub update [owner/repo/skill]         # Update skill(s) to latest
 skillshub info <owner/repo/skill>           # Show skill details
-skillshub install-all                       # Install all from default tap
+skillshub install-all                       # Install all from all added taps
 ```
 
 ### Tap Management
