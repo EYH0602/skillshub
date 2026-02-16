@@ -12,6 +12,11 @@ use tar::Archive;
 use super::models::{GitHubUrl, SkillEntry, TapRegistry};
 use crate::skill::SkillMetadata;
 
+/// GraphQL API URL (overridden in tests via SKILLSHUB_GITHUB_GRAPHQL_URL)
+fn graphql_url() -> String {
+    std::env::var("SKILLSHUB_GITHUB_GRAPHQL_URL").unwrap_or_else(|_| "https://api.github.com/graphql".to_string())
+}
+
 /// User agent for API requests
 const USER_AGENT: &str = "skillshub";
 
@@ -660,9 +665,205 @@ fn copy_dir_contents(src: &Path, dst: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Parse a GitHub star list URL into (username, list_name)
+///
+/// Supports: https://github.com/stars/{user}/lists/{list-name}
+pub fn parse_star_list_url(url: &str) -> Result<(String, String)> {
+    let url = url.trim_end_matches('/');
+
+    let path = url
+        .strip_prefix("https://github.com/")
+        .or_else(|| url.strip_prefix("http://github.com/"))
+        .or_else(|| url.strip_prefix("github.com/"))
+        .with_context(|| {
+            format!(
+                "Invalid star list URL: {}\n\
+                 Expected format: https://github.com/stars/<user>/lists/<list-name>",
+                url
+            )
+        })?;
+
+    let parts: Vec<&str> = path.split('/').collect();
+
+    // Expected: ["stars", "<user>", "lists", "<list-name>"]
+    if parts.len() != 4 || parts[0] != "stars" || parts[2] != "lists" {
+        anyhow::bail!(
+            "Invalid star list URL: {}\n\
+             Expected format: https://github.com/stars/<user>/lists/<list-name>",
+            url
+        );
+    }
+
+    let user = parts[1];
+    let list_name = parts[3];
+
+    if user.is_empty() || list_name.is_empty() {
+        anyhow::bail!("Star list URL has empty user or list name");
+    }
+
+    Ok((user.to_string(), list_name.to_string()))
+}
+
+/// Require that GITHUB_TOKEN is set and return a RequestBuilder with auth
+fn require_auth(request: RequestBuilder) -> Result<RequestBuilder> {
+    let token = std::env::var("GITHUB_TOKEN").with_context(|| {
+        "GITHUB_TOKEN is required for star list operations.\n\
+         The GraphQL API does not support unauthenticated requests.\n\
+         Set GITHUB_TOKEN with a personal access token."
+    })?;
+    Ok(request.bearer_auth(token))
+}
+
+/// Fetch all repositories from a GitHub star list using the GraphQL API
+///
+/// Returns a list of "owner/repo" identifiers.
+pub fn fetch_star_list_repos(username: &str, list_name: &str) -> Result<Vec<String>> {
+    let client = build_client()?;
+    let gql_url = graphql_url();
+
+    // Step 1: Find the list ID by querying the user's lists
+    let find_list_query = serde_json::json!({
+        "query": r#"query($login: String!) {
+            user(login: $login) {
+                lists(first: 100) {
+                    nodes {
+                        id
+                        name
+                    }
+                }
+            }
+        }"#,
+        "variables": {
+            "login": username
+        }
+    });
+
+    let resp = send_with_retry(
+        || {
+            let req = client.post(&gql_url).json(&find_list_query);
+            require_auth(req).unwrap_or_else(|_| client.post(&gql_url))
+        },
+        &gql_url,
+    )?;
+
+    if !resp.status().is_success() {
+        anyhow::bail!(
+            "Failed to query GitHub GraphQL API: HTTP {}\n\
+             Make sure GITHUB_TOKEN is set and valid.",
+            resp.status()
+        );
+    }
+
+    let body: serde_json::Value = resp.json().with_context(|| "Failed to parse GraphQL response")?;
+
+    // Check for GraphQL errors
+    if let Some(errors) = body.get("errors") {
+        anyhow::bail!("GraphQL error: {}", errors);
+    }
+
+    let lists = body["data"]["user"]["lists"]["nodes"]
+        .as_array()
+        .with_context(|| format!("User '{}' not found or has no lists", username))?;
+
+    let list_id = lists
+        .iter()
+        .find(|list| {
+            list["name"]
+                .as_str()
+                .map(|n| n.eq_ignore_ascii_case(list_name))
+                .unwrap_or(false)
+        })
+        .and_then(|list| list["id"].as_str())
+        .with_context(|| {
+            let available: Vec<&str> = lists.iter().filter_map(|l| l["name"].as_str()).collect();
+            format!(
+                "Star list '{}' not found for user '{}'.\nAvailable lists: {}",
+                list_name,
+                username,
+                if available.is_empty() {
+                    "(none)".to_string()
+                } else {
+                    available.join(", ")
+                }
+            )
+        })?
+        .to_string();
+
+    // Step 2: Fetch repos from the list with pagination
+    let mut repos = Vec::new();
+    let mut cursor: Option<String> = None;
+
+    loop {
+        let fetch_repos_query = serde_json::json!({
+            "query": r#"query($listId: ID!, $cursor: String) {
+                node(id: $listId) {
+                    ... on UserList {
+                        items(first: 100, after: $cursor) {
+                            nodes {
+                                ... on Repository {
+                                    nameWithOwner
+                                }
+                            }
+                            pageInfo {
+                                hasNextPage
+                                endCursor
+                            }
+                        }
+                    }
+                }
+            }"#,
+            "variables": {
+                "listId": list_id,
+                "cursor": cursor,
+            }
+        });
+
+        let resp = send_with_retry(
+            || {
+                let req = client.post(&gql_url).json(&fetch_repos_query);
+                require_auth(req).unwrap_or_else(|_| client.post(&gql_url))
+            },
+            &gql_url,
+        )?;
+
+        if !resp.status().is_success() {
+            anyhow::bail!("Failed to fetch star list repos: HTTP {}", resp.status());
+        }
+
+        let body: serde_json::Value = resp.json().with_context(|| "Failed to parse GraphQL response")?;
+
+        if let Some(errors) = body.get("errors") {
+            anyhow::bail!("GraphQL error: {}", errors);
+        }
+
+        let items = &body["data"]["node"]["items"];
+        let nodes = items["nodes"]
+            .as_array()
+            .with_context(|| "Failed to parse star list items")?;
+
+        for node in nodes {
+            if let Some(name) = node["nameWithOwner"].as_str() {
+                repos.push(name.to_string());
+            }
+        }
+
+        let page_info = &items["pageInfo"];
+        let has_next = page_info["hasNextPage"].as_bool().unwrap_or(false);
+
+        if has_next {
+            cursor = page_info["endCursor"].as_str().map(|s| s.to_string());
+        } else {
+            break;
+        }
+    }
+
+    Ok(repos)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     #[test]
     fn test_parse_skill_md_content() {
@@ -1197,6 +1398,181 @@ name: minimal-skill
         assert!(
             err_msg.contains("after 5 retries"),
             "error should mention retry count: {}",
+            err_msg
+        );
+    }
+
+    // --- Star list URL parsing tests ---
+
+    #[test]
+    fn test_parse_star_list_url_valid_https() {
+        let (user, list) = parse_star_list_url("https://github.com/stars/EYH0602/lists/skills").unwrap();
+        assert_eq!(user, "EYH0602");
+        assert_eq!(list, "skills");
+    }
+
+    #[test]
+    fn test_parse_star_list_url_valid_http() {
+        let (user, list) = parse_star_list_url("http://github.com/stars/user/lists/my-list").unwrap();
+        assert_eq!(user, "user");
+        assert_eq!(list, "my-list");
+    }
+
+    #[test]
+    fn test_parse_star_list_url_no_protocol() {
+        let (user, list) = parse_star_list_url("github.com/stars/user/lists/my-list").unwrap();
+        assert_eq!(user, "user");
+        assert_eq!(list, "my-list");
+    }
+
+    #[test]
+    fn test_parse_star_list_url_trailing_slash() {
+        let (user, list) = parse_star_list_url("https://github.com/stars/user/lists/my-list/").unwrap();
+        assert_eq!(user, "user");
+        assert_eq!(list, "my-list");
+    }
+
+    #[test]
+    fn test_parse_star_list_url_invalid_not_github() {
+        assert!(parse_star_list_url("https://gitlab.com/stars/user/lists/my-list").is_err());
+    }
+
+    #[test]
+    fn test_parse_star_list_url_invalid_wrong_format() {
+        assert!(parse_star_list_url("https://github.com/user/repo").is_err());
+    }
+
+    #[test]
+    fn test_parse_star_list_url_invalid_missing_lists() {
+        assert!(parse_star_list_url("https://github.com/stars/user/other/name").is_err());
+    }
+
+    #[test]
+    fn test_parse_star_list_url_invalid_extra_segments() {
+        assert!(parse_star_list_url("https://github.com/stars/user/lists/name/extra").is_err());
+    }
+
+    // --- Star list GraphQL integration tests ---
+
+    #[test]
+    #[serial]
+    fn test_fetch_star_list_repos_with_mock() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let server = rt.block_on(wiremock::MockServer::start());
+
+        // Mock the first GraphQL call: find list ID
+        let lists_response = serde_json::json!({
+            "data": {
+                "user": {
+                    "lists": {
+                        "nodes": [
+                            { "id": "UL_abc123", "name": "skills" },
+                            { "id": "UL_def456", "name": "other-list" }
+                        ]
+                    }
+                }
+            }
+        });
+
+        // Mock the second GraphQL call: fetch repos from list
+        let repos_response = serde_json::json!({
+            "data": {
+                "node": {
+                    "items": {
+                        "nodes": [
+                            { "nameWithOwner": "anthropics/skills" },
+                            { "nameWithOwner": "vercel-labs/agent-skills" }
+                        ],
+                        "pageInfo": {
+                            "hasNextPage": false,
+                            "endCursor": null
+                        }
+                    }
+                }
+            }
+        });
+
+        rt.block_on(async {
+            // First call returns lists, second returns repos
+            wiremock::Mock::given(wiremock::matchers::method("POST"))
+                .and(wiremock::matchers::path("/graphql"))
+                .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(&lists_response))
+                .up_to_n_times(1)
+                .mount(&server)
+                .await;
+
+            wiremock::Mock::given(wiremock::matchers::method("POST"))
+                .and(wiremock::matchers::path("/graphql"))
+                .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(&repos_response))
+                .mount(&server)
+                .await;
+        });
+
+        // Point GraphQL URL to mock server
+        let gql_url = format!("{}/graphql", server.uri());
+        std::env::set_var("SKILLSHUB_GITHUB_GRAPHQL_URL", &gql_url);
+        // Set a dummy token so require_auth succeeds
+        std::env::set_var("GITHUB_TOKEN", "test-token");
+
+        let result = fetch_star_list_repos("testuser", "skills");
+
+        // Clean up env vars
+        std::env::remove_var("SKILLSHUB_GITHUB_GRAPHQL_URL");
+        std::env::remove_var("GITHUB_TOKEN");
+
+        assert!(result.is_ok(), "fetch should succeed: {:?}", result.err());
+        let repos = result.unwrap();
+        assert_eq!(repos.len(), 2);
+        assert_eq!(repos[0], "anthropics/skills");
+        assert_eq!(repos[1], "vercel-labs/agent-skills");
+    }
+
+    #[test]
+    #[serial]
+    fn test_fetch_star_list_repos_list_not_found() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let server = rt.block_on(wiremock::MockServer::start());
+
+        let lists_response = serde_json::json!({
+            "data": {
+                "user": {
+                    "lists": {
+                        "nodes": [
+                            { "id": "UL_abc123", "name": "other-list" }
+                        ]
+                    }
+                }
+            }
+        });
+
+        rt.block_on(async {
+            wiremock::Mock::given(wiremock::matchers::method("POST"))
+                .and(wiremock::matchers::path("/graphql"))
+                .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(&lists_response))
+                .mount(&server)
+                .await;
+        });
+
+        let gql_url = format!("{}/graphql", server.uri());
+        std::env::set_var("SKILLSHUB_GITHUB_GRAPHQL_URL", &gql_url);
+        std::env::set_var("GITHUB_TOKEN", "test-token");
+
+        let result = fetch_star_list_repos("testuser", "nonexistent");
+
+        std::env::remove_var("SKILLSHUB_GITHUB_GRAPHQL_URL");
+        std::env::remove_var("GITHUB_TOKEN");
+
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("not found"),
+            "error should mention list not found: {}",
             err_msg
         );
     }

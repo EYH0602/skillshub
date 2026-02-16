@@ -123,6 +123,20 @@ skillshub tap install-all anthropics/skills
 skillshub tap remove vercel-labs/agent-skills
 ```
 
+### Import from GitHub Star Lists
+
+If you curate skills taps in a GitHub star list, you can import all of them at once:
+
+```bash
+# Add all repos from a star list as taps
+skillshub star-list https://github.com/stars/username/lists/skills
+
+# Add taps and install all skills from each
+skillshub star-list https://github.com/stars/username/lists/skills --install
+```
+
+This requires a `GITHUB_TOKEN` (the GraphQL API requires authentication).
+
 ### Agent Linking
 
 ```bash

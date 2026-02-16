@@ -10,4 +10,4 @@ pub use skill::{
     add_skill_from_url, install_all, install_all_from_tap, install_skill, list_skills, search_skills, show_skill_info,
     uninstall_skill, update_skill,
 };
-pub use tap::{add_tap, list_taps, remove_tap, update_tap};
+pub use tap::{add_tap, import_star_list, list_taps, remove_tap, update_tap};

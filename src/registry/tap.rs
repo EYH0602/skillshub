@@ -7,7 +7,7 @@ use tabled::{
 };
 
 use super::db::{self, DEFAULT_TAP_NAME};
-use super::github::{discover_skills_from_repo, parse_github_url};
+use super::github::{discover_skills_from_repo, fetch_star_list_repos, parse_github_url, parse_star_list_url};
 use super::models::{Database, TapInfo, TapRegistry};
 use crate::util::truncate_string;
 
@@ -280,6 +280,65 @@ pub fn generate_local_registry() -> Result<TapRegistry> {
         description: Some("Default skillshub tap with bundled skills".to_string()),
         skills: skill_entries,
     })
+}
+
+/// Import taps from a GitHub star list URL
+///
+/// Parses the star list URL, fetches all repositories from it, and adds
+/// each one as a tap. Skips repos already added as taps.
+pub fn import_star_list(url: &str, install: bool) -> Result<()> {
+    let (username, list_name) = parse_star_list_url(url)?;
+
+    println!(
+        "{} Fetching star list '{}' from user '{}'...",
+        "=>".green().bold(),
+        list_name,
+        username
+    );
+
+    let repos = fetch_star_list_repos(&username, &list_name)?;
+
+    if repos.is_empty() {
+        println!("  {} No repositories found in star list '{}'", "!".yellow(), list_name);
+        return Ok(());
+    }
+
+    println!("  {} Found {} repositories", "✓".green(), repos.len());
+
+    let db = db::init_db()?;
+    let mut added = 0usize;
+    let mut skipped = 0usize;
+    let mut failed = 0usize;
+
+    for repo in &repos {
+        if db.taps.contains_key(repo) {
+            println!("  {} {} (already added)", "–".dimmed(), repo);
+            skipped += 1;
+            continue;
+        }
+
+        println!();
+        match add_tap(repo, install) {
+            Ok(()) => {
+                added += 1;
+            }
+            Err(e) => {
+                eprintln!("  {} Failed to add {}: {}", "✗".red(), repo, e);
+                failed += 1;
+            }
+        }
+    }
+
+    println!();
+    println!(
+        "{} Star list import complete: {} added, {} skipped, {} failed",
+        "=>".green().bold(),
+        added,
+        skipped,
+        failed
+    );
+
+    Ok(())
 }
 
 #[cfg(test)]
