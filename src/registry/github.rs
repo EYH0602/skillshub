@@ -704,24 +704,21 @@ pub fn parse_star_list_url(url: &str) -> Result<(String, String)> {
     Ok((user.to_string(), list_name.to_string()))
 }
 
-/// Require that GITHUB_TOKEN is set and return a RequestBuilder with auth
-fn require_auth(request: RequestBuilder) -> Result<RequestBuilder> {
+/// Fetch all repositories from a GitHub star list using the GraphQL API
+///
+/// Returns a list of "owner/repo" identifiers.
+pub fn fetch_star_list_repos(username: &str, list_name: &str) -> Result<Vec<String>> {
     let token = std::env::var("GITHUB_TOKEN").with_context(|| {
         "GITHUB_TOKEN is required for star list operations.\n\
          The GraphQL API does not support unauthenticated requests.\n\
          Set GITHUB_TOKEN with a personal access token."
     })?;
-    Ok(request.bearer_auth(token))
-}
-
-/// Fetch all repositories from a GitHub star list using the GraphQL API
-///
-/// Returns a list of "owner/repo" identifiers.
-pub fn fetch_star_list_repos(username: &str, list_name: &str) -> Result<Vec<String>> {
     let client = build_client()?;
     let gql_url = graphql_url();
 
-    // Step 1: Find the list ID by querying the user's lists
+    // Step 1: Find the list ID by querying the user's lists.
+    // Note: fetches up to 100 lists without pagination. This is sufficient in
+    // practice since very few users have >100 star lists.
     let find_list_query = serde_json::json!({
         "query": r#"query($login: String!) {
             user(login: $login) {
@@ -739,10 +736,7 @@ pub fn fetch_star_list_repos(username: &str, list_name: &str) -> Result<Vec<Stri
     });
 
     let resp = send_with_retry(
-        || {
-            let req = client.post(&gql_url).json(&find_list_query);
-            require_auth(req).unwrap_or_else(|_| client.post(&gql_url))
-        },
+        || client.post(&gql_url).json(&find_list_query).bearer_auth(&token),
         &gql_url,
     )?;
 
@@ -819,10 +813,7 @@ pub fn fetch_star_list_repos(username: &str, list_name: &str) -> Result<Vec<Stri
         });
 
         let resp = send_with_retry(
-            || {
-                let req = client.post(&gql_url).json(&fetch_repos_query);
-                require_auth(req).unwrap_or_else(|_| client.post(&gql_url))
-            },
+            || client.post(&gql_url).json(&fetch_repos_query).bearer_auth(&token),
             &gql_url,
         )?;
 
@@ -1514,7 +1505,7 @@ name: minimal-skill
         // Point GraphQL URL to mock server
         let gql_url = format!("{}/graphql", server.uri());
         std::env::set_var("SKILLSHUB_GITHUB_GRAPHQL_URL", &gql_url);
-        // Set a dummy token so require_auth succeeds
+        // Set a dummy token so GITHUB_TOKEN check succeeds
         std::env::set_var("GITHUB_TOKEN", "test-token");
 
         let result = fetch_star_list_repos("testuser", "skills");

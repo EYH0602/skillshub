@@ -305,12 +305,13 @@ pub fn import_star_list(url: &str, install: bool) -> Result<()> {
 
     println!("  {} Found {} repositories", "✓".green(), repos.len());
 
-    let db = db::init_db()?;
     let mut added = 0usize;
     let mut skipped = 0usize;
     let mut failed = 0usize;
 
     for repo in &repos {
+        // Reload DB each iteration since add_tap() modifies it internally
+        let db = db::init_db()?;
         if db.taps.contains_key(repo) {
             println!("  {} {} (already added)", "–".dimmed(), repo);
             skipped += 1;
