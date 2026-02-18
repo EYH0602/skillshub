@@ -72,6 +72,16 @@ pub enum Commands {
     #[command(subcommand)]
     Clean(CleanCommands),
 
+    /// Add all taps from a GitHub star list
+    StarList {
+        /// GitHub star list URL (e.g., https://github.com/stars/user/lists/list-name)
+        url: String,
+
+        /// Install all skills from each tap after adding
+        #[arg(short, long)]
+        install: bool,
+    },
+
     /// Migrate old-style installations to the new registry format
     Migrate,
 }

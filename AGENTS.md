@@ -101,6 +101,15 @@ skillshub info <owner/repo/skill>           # Show skill details
 skillshub install-all                       # Install all from all added taps
 ```
 
+### Star List Import
+```bash
+skillshub star-list <url>                   # Add all repos from a star list as taps
+skillshub star-list <url> --install         # Also install all skills from each tap
+# Example: skillshub star-list https://github.com/stars/EYH0602/lists/skills
+```
+
+Requires `GITHUB_TOKEN` (GraphQL API requires authentication).
+
 ### Tap Management
 
 The default tap is `EYH0602/skillshub` (bundled). Add third-party taps like `anthropics/skills` or `vercel-labs/agent-skills`.
