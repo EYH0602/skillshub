@@ -30,7 +30,10 @@ pub fn load_db() -> Result<Database> {
     let mut db: Database =
         serde_json::from_str(&content).with_context(|| format!("Failed to parse database at {}", db_path.display()))?;
 
-    normalize_default_taps(&mut db);
+    if normalize_default_taps(&mut db) {
+        // Persist the fix so the corrupt state is not re-applied on every load
+        let _ = save_db(&db);
+    }
 
     Ok(db)
 }
@@ -38,38 +41,30 @@ pub fn load_db() -> Result<Database> {
 /// Ensure exactly one tap is marked as default.
 ///
 /// If multiple taps have `is_default = true`, only the canonical default tap
-/// (`EYH0602/skillshub`) keeps the flag. If that tap is not present, the first
-/// tap (by key order) with `is_default = true` is kept; all others are cleared.
-fn normalize_default_taps(db: &mut Database) {
+/// (`EYH0602/skillshub`) keeps the flag. If that tap is not present, the
+/// lexicographically-first tap with `is_default = true` is kept; all others are cleared.
+///
+/// Returns `true` if any tap flags were changed, `false` if no changes were needed.
+fn normalize_default_taps(db: &mut Database) -> bool {
     let default_count = db.taps.values().filter(|t| t.is_default).count();
 
     // Nothing to fix if zero or one default
     if default_count <= 1 {
-        return;
+        return false;
     }
 
     // More than one default: determine which tap should be THE default.
-    // Prefer the canonical DEFAULT_TAP_NAME; otherwise keep the first one found.
+    // Prefer the canonical DEFAULT_TAP_NAME; otherwise keep the lexicographically-first one.
     let canonical_is_present = db.taps.get(DEFAULT_TAP_NAME).map(|t| t.is_default).unwrap_or(false);
 
-    // Collect names of taps whose is_default flag must be cleared.
-    let to_clear: Vec<String> = db
-        .taps
-        .iter()
-        .filter(|(name, tap)| {
-            tap.is_default && {
-                if canonical_is_present {
-                    // Clear every default tap that isn't the canonical one
-                    name.as_str() != DEFAULT_TAP_NAME
-                } else {
-                    false // handled below via sorted first-tap logic
-                }
-            }
-        })
-        .map(|(name, _)| name.clone())
-        .collect();
-
     if canonical_is_present {
+        // Clear every default tap that isn't the canonical one
+        let to_clear: Vec<String> = db
+            .taps
+            .iter()
+            .filter(|(name, tap)| tap.is_default && name.as_str() != DEFAULT_TAP_NAME)
+            .map(|(name, _)| name.clone())
+            .collect();
         for name in to_clear {
             if let Some(tap) = db.taps.get_mut(&name) {
                 tap.is_default = false;
@@ -92,6 +87,8 @@ fn normalize_default_taps(db: &mut Database) {
             }
         }
     }
+
+    true
 }
 
 /// Save the database to disk
@@ -414,7 +411,12 @@ mod tests {
         normalize_default_taps(&mut db);
 
         // Exactly one tap should be default (lexicographically first: "alpha/tap")
-        let defaults: Vec<&str> = db.taps.iter().filter(|(_, t)| t.is_default).map(|(n, _)| n.as_str()).collect();
+        let defaults: Vec<&str> = db
+            .taps
+            .iter()
+            .filter(|(_, t)| t.is_default)
+            .map(|(n, _)| n.as_str())
+            .collect();
         assert_eq!(defaults.len(), 1);
         assert!(db.taps["alpha/tap"].is_default);
         assert!(!db.taps["beta/tap"].is_default);
