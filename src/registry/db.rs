@@ -27,10 +27,71 @@ pub fn load_db() -> Result<Database> {
     let content =
         fs::read_to_string(&db_path).with_context(|| format!("Failed to read database at {}", db_path.display()))?;
 
-    let db: Database =
+    let mut db: Database =
         serde_json::from_str(&content).with_context(|| format!("Failed to parse database at {}", db_path.display()))?;
 
+    normalize_default_taps(&mut db);
+
     Ok(db)
+}
+
+/// Ensure exactly one tap is marked as default.
+///
+/// If multiple taps have `is_default = true`, only the canonical default tap
+/// (`EYH0602/skillshub`) keeps the flag. If that tap is not present, the first
+/// tap (by key order) with `is_default = true` is kept; all others are cleared.
+fn normalize_default_taps(db: &mut Database) {
+    let default_count = db.taps.values().filter(|t| t.is_default).count();
+
+    // Nothing to fix if zero or one default
+    if default_count <= 1 {
+        return;
+    }
+
+    // More than one default: determine which tap should be THE default.
+    // Prefer the canonical DEFAULT_TAP_NAME; otherwise keep the first one found.
+    let canonical_is_present = db.taps.get(DEFAULT_TAP_NAME).map(|t| t.is_default).unwrap_or(false);
+
+    // Collect names of taps whose is_default flag must be cleared.
+    let to_clear: Vec<String> = db
+        .taps
+        .iter()
+        .filter(|(name, tap)| {
+            tap.is_default && {
+                if canonical_is_present {
+                    // Clear every default tap that isn't the canonical one
+                    name.as_str() != DEFAULT_TAP_NAME
+                } else {
+                    false // handled below via sorted first-tap logic
+                }
+            }
+        })
+        .map(|(name, _)| name.clone())
+        .collect();
+
+    if canonical_is_present {
+        for name in to_clear {
+            if let Some(tap) = db.taps.get_mut(&name) {
+                tap.is_default = false;
+            }
+        }
+    } else {
+        // No canonical tap — keep the lexicographically-first default tap
+        let mut default_names: Vec<String> = db
+            .taps
+            .iter()
+            .filter(|(_, tap)| tap.is_default)
+            .map(|(name, _)| name.clone())
+            .collect();
+        default_names.sort();
+
+        // Clear all but the first
+        for name in default_names.into_iter().skip(1) {
+            if let Some(tap) = db.taps.get_mut(&name) {
+                tap.is_default = false;
+            }
+        }
+    }
 }
 
 /// Save the database to disk
@@ -303,5 +364,71 @@ mod tests {
         let removed = remove_external_skill(&mut db, "my-external-skill");
         assert!(removed.is_some());
         assert!(!is_external_skill(&db, "my-external-skill"));
+    }
+
+    fn make_tap(is_default: bool) -> TapInfo {
+        TapInfo {
+            url: "https://github.com/user/repo".to_string(),
+            skills_path: "skills".to_string(),
+            updated_at: None,
+            is_default,
+            cached_registry: None,
+        }
+    }
+
+    #[test]
+    fn test_normalize_default_taps_single_default() {
+        let mut db = Database::default();
+        db.taps.insert(DEFAULT_TAP_NAME.to_string(), make_tap(true));
+        db.taps.insert("other/tap".to_string(), make_tap(false));
+
+        normalize_default_taps(&mut db);
+
+        // Should remain unchanged
+        assert!(db.taps[DEFAULT_TAP_NAME].is_default);
+        assert!(!db.taps["other/tap"].is_default);
+    }
+
+    #[test]
+    fn test_normalize_default_taps_multiple_defaults_with_canonical() {
+        let mut db = Database::default();
+        db.taps.insert(DEFAULT_TAP_NAME.to_string(), make_tap(true));
+        db.taps.insert("anthropics/skills".to_string(), make_tap(true));
+        db.taps.insert("other/tap".to_string(), make_tap(false));
+
+        normalize_default_taps(&mut db);
+
+        // Only the canonical default tap should remain marked as default
+        assert!(db.taps[DEFAULT_TAP_NAME].is_default);
+        assert!(!db.taps["anthropics/skills"].is_default);
+        assert!(!db.taps["other/tap"].is_default);
+    }
+
+    #[test]
+    fn test_normalize_default_taps_multiple_defaults_without_canonical() {
+        let mut db = Database::default();
+        db.taps.insert("alpha/tap".to_string(), make_tap(true));
+        db.taps.insert("beta/tap".to_string(), make_tap(true));
+        db.taps.insert("gamma/tap".to_string(), make_tap(true));
+
+        normalize_default_taps(&mut db);
+
+        // Exactly one tap should be default (lexicographically first: "alpha/tap")
+        let defaults: Vec<&str> = db.taps.iter().filter(|(_, t)| t.is_default).map(|(n, _)| n.as_str()).collect();
+        assert_eq!(defaults.len(), 1);
+        assert!(db.taps["alpha/tap"].is_default);
+        assert!(!db.taps["beta/tap"].is_default);
+        assert!(!db.taps["gamma/tap"].is_default);
+    }
+
+    #[test]
+    fn test_normalize_default_taps_no_defaults() {
+        let mut db = Database::default();
+        db.taps.insert("user/tap".to_string(), make_tap(false));
+
+        normalize_default_taps(&mut db);
+
+        // Nothing changes when there are zero defaults
+        assert!(!db.taps["user/tap"].is_default);
     }
 }
