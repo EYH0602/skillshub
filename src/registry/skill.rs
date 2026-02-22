@@ -6,12 +6,12 @@ use tabled::{
     Table, Tabled,
 };
 
-use super::db;
+use super::db::{self, DEFAULT_TAP_NAME};
 use super::github::{download_skill, get_default_branch, get_latest_commit, parse_github_url};
 use super::models::{InstalledSkill, SkillId};
 use super::tap::get_tap_registry;
 use crate::commands::link_to_agents;
-use crate::paths::get_skills_install_dir;
+use crate::paths::{get_embedded_skills_dir, get_skills_install_dir};
 use crate::skill::discover_skills;
 use crate::util::truncate_string;
 
@@ -95,7 +95,28 @@ fn install_skill_internal(full_name: &str) -> Result<bool> {
     let dest = install_dir.join(&skill_id.tap).join(&skill_id.skill);
     std::fs::create_dir_all(&dest)?;
 
-    let (commit, _) = install_from_remote(&tap.url, &skill_entry.path, &dest, requested_commit.as_deref())?;
+    // For the default (bundled) tap, try to copy from local skills directory first.
+    // Only fall back to network download if the local path is not available.
+    let commit = if tap.is_default || skill_id.tap == DEFAULT_TAP_NAME {
+        match install_from_local(&skill_id.skill, &dest) {
+            Ok(()) => {
+                println!("  {} Installed from bundled skills (no network required)", "✓".green());
+                None // local install has no remote commit SHA
+            }
+            Err(e) => {
+                println!(
+                    "  {} Local bundled skill not found ({}), falling back to network download",
+                    "!".yellow(),
+                    e
+                );
+                let (commit, _) = install_from_remote(&tap.url, &skill_entry.path, &dest, requested_commit.as_deref())?;
+                commit
+            }
+        }
+    } else {
+        let (commit, _) = install_from_remote(&tap.url, &skill_entry.path, &dest, requested_commit.as_deref())?;
+        commit
+    };
 
     // Record in database
     let installed = InstalledSkill {
@@ -212,6 +233,44 @@ pub fn add_skill_from_url(url: &str) -> Result<()> {
     // Auto-link to all agents
     link_to_agents()?;
 
+    Ok(())
+}
+
+/// Install from local bundled skills directory (for the default tap).
+/// Copies the skill directory from the bundled skills path to the destination.
+fn install_from_local(skill_name: &str, dest: &std::path::Path) -> Result<()> {
+    let skills_dir = get_embedded_skills_dir()?;
+    let source = skills_dir.join(skill_name);
+
+    if !source.exists() {
+        anyhow::bail!("skill '{}' not found in bundled skills at {}", skill_name, source.display());
+    }
+
+    // Remove destination if it exists (clean reinstall)
+    if dest.exists() {
+        std::fs::remove_dir_all(dest)?;
+    }
+    std::fs::create_dir_all(dest)?;
+
+    // Recursively copy the skill directory
+    copy_dir_all(&source, dest)?;
+
+    Ok(())
+}
+
+/// Recursively copy a directory from src to dst.
+fn copy_dir_all(src: &std::path::Path, dst: &std::path::Path) -> Result<()> {
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        let dest_path = dst.join(entry.file_name());
+        if ty.is_dir() {
+            std::fs::create_dir_all(&dest_path)?;
+            copy_dir_all(&entry.path(), &dest_path)?;
+        } else {
+            std::fs::copy(entry.path(), &dest_path)?;
+        }
+    }
     Ok(())
 }
 
