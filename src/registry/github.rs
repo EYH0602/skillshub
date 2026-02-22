@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use flate2::read::GzDecoder;
 use reqwest::blocking::{Client, RequestBuilder, Response};
 use serde::Deserialize;
@@ -242,11 +242,17 @@ where
 }
 
 /// Build an HTTP client with GitHub token if available
+///
+/// Uses `catch_unwind` to convert panics from the underlying `system-configuration`
+/// crate (macOS proxy detection) or reqwest's blocking runtime into proper errors.
 fn build_client() -> Result<Client> {
-    Client::builder()
-        .user_agent(USER_AGENT)
-        .build()
-        .context("Failed to build HTTP client")
+    std::panic::catch_unwind(|| {
+        Client::builder()
+            .user_agent(USER_AGENT)
+            .build()
+            .context("Failed to build HTTP client")
+    })
+    .unwrap_or_else(|_| Err(anyhow!("HTTP client panicked during initialization (system-configuration or proxy detection failure)")))
 }
 
 /// Add GitHub token authentication to a request if GITHUB_TOKEN is set
