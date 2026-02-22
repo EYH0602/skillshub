@@ -649,7 +649,7 @@ fn extract_skill_paths(tree: &[TreeEntry]) -> Vec<String> {
 }
 
 /// Recursively copy directory contents
-fn copy_dir_contents(src: &Path, dst: &Path) -> Result<()> {
+pub(crate) fn copy_dir_contents(src: &Path, dst: &Path) -> Result<()> {
     for entry in fs::read_dir(src)? {
         let entry = entry?;
         let src_path = entry.path();
