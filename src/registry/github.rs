@@ -243,8 +243,14 @@ where
 
 /// Build an HTTP client with GitHub token if available
 ///
-/// Uses `catch_unwind` to convert panics from the underlying `system-configuration`
-/// crate (macOS proxy detection) or reqwest's blocking runtime into proper errors.
+/// Uses `catch_unwind` to intercept panics from the underlying `system-configuration`
+/// crate (macOS proxy detection) or reqwest's blocking runtime, converting them into
+/// proper `Result::Err` values.
+///
+/// **Note:** `catch_unwind` only catches panics that propagate to the calling thread.
+/// If reqwest raises the panic on an internal thread that does not re-raise it here,
+/// the process will still abort. Additionally, `catch_unwind` is a no-op when compiled
+/// with `panic = "abort"`.
 fn build_client() -> Result<Client> {
     std::panic::catch_unwind(|| {
         Client::builder()
@@ -252,7 +258,18 @@ fn build_client() -> Result<Client> {
             .build()
             .context("Failed to build HTTP client")
     })
-    .unwrap_or_else(|_| Err(anyhow!("HTTP client panicked during initialization (system-configuration or proxy detection failure)")))
+    .unwrap_or_else(|panic_payload| {
+        let msg = panic_payload
+            .downcast_ref::<String>()
+            .map(|s| s.as_str())
+            .or_else(|| panic_payload.downcast_ref::<&str>().copied())
+            .unwrap_or("unknown");
+        Err(anyhow!(
+            "HTTP client panicked during initialization \
+             (system-configuration or proxy detection failure): {}",
+            msg
+        ))
+    })
 }
 
 /// Add GitHub token authentication to a request if GITHUB_TOKEN is set
@@ -861,6 +878,12 @@ pub fn fetch_star_list_repos(username: &str, list_name: &str) -> Result<Vec<Stri
 mod tests {
     use super::*;
     use serial_test::serial;
+
+    #[test]
+    fn test_build_client_succeeds() {
+        let result = build_client();
+        assert!(result.is_ok(), "build_client should succeed in normal conditions");
+    }
 
     #[test]
     fn test_parse_skill_md_content() {
