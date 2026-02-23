@@ -698,17 +698,9 @@ pub fn show_skill_info(full_name: &str) -> Result<()> {
         }
     }
 
-    println!(
-        "  {}: {}",
-        "Status".cyan(),
-        if installed.is_some() {
-            "Installed".green().to_string()
-        } else {
-            "Not installed".yellow().to_string()
-        }
-    );
-
-    // Read versioning metadata from installed SKILL.md when available
+    // Read versioning metadata from installed SKILL.md when available.
+    // Note: these fields (license, author, version) are only shown for locally installed
+    // skills; they are not available for tap-available skills that have not been installed.
     let skill_md_path = install_dir.join(&skill_id.tap).join(&skill_id.skill).join("SKILL.md");
     let version_meta = if skill_md_path.exists() {
         parse_skill_metadata(&skill_md_path).ok()
@@ -729,6 +721,16 @@ pub fn show_skill_info(full_name: &str) -> Result<()> {
             }
         }
     }
+
+    println!(
+        "  {}: {}",
+        "Status".cyan(),
+        if installed.is_some() {
+            "Installed".green().to_string()
+        } else {
+            "Not installed".yellow().to_string()
+        }
+    );
 
     if let Some(inst) = installed {
         if let Some(commit) = &inst.commit {
