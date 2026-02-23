@@ -6,12 +6,12 @@ use tabled::{
     Table, Tabled,
 };
 
-use super::db;
-use super::github::{download_skill, get_default_branch, get_latest_commit, parse_github_url};
+use super::db::{self, DEFAULT_TAP_NAME};
+use super::github::{copy_dir_contents, download_skill, get_default_branch, get_latest_commit, parse_github_url};
 use super::models::{InstalledSkill, SkillId};
 use super::tap::get_tap_registry;
 use crate::commands::link_to_agents;
-use crate::paths::get_skills_install_dir;
+use crate::paths::{get_embedded_skills_dir, get_skills_install_dir};
 use crate::skill::discover_skills;
 use crate::util::truncate_string;
 
@@ -95,7 +95,34 @@ fn install_skill_internal(full_name: &str) -> Result<bool> {
     let dest = install_dir.join(&skill_id.tap).join(&skill_id.skill);
     std::fs::create_dir_all(&dest)?;
 
-    let (commit, _) = install_from_remote(&tap.url, &skill_entry.path, &dest, requested_commit.as_deref())?;
+    // For the default (bundled) tap, try to copy from local skills directory first.
+    // Only fall back to network download if the local path is not available.
+    let commit = if tap.is_default || skill_id.tap == DEFAULT_TAP_NAME {
+        if requested_commit.is_some() {
+            println!(
+                "  {} @commit specifier is ignored for bundled default tap skills (using local copy)",
+                "!".yellow()
+            );
+        }
+        match install_from_local(&skill_id.skill, &dest) {
+            Ok(()) => {
+                println!("  {} Installed from bundled skills (no network required)", "✓".green());
+                None // local install has no remote commit SHA
+            }
+            Err(e) => {
+                println!(
+                    "  {} Local bundled skill not found ({}), falling back to network download",
+                    "!".yellow(),
+                    e
+                );
+                let (commit, _) = install_from_remote(&tap.url, &skill_entry.path, &dest, requested_commit.as_deref())?;
+                commit
+            }
+        }
+    } else {
+        let (commit, _) = install_from_remote(&tap.url, &skill_entry.path, &dest, requested_commit.as_deref())?;
+        commit
+    };
 
     // Record in database
     let installed = InstalledSkill {
@@ -211,6 +238,32 @@ pub fn add_skill_from_url(url: &str) -> Result<()> {
 
     // Auto-link to all agents
     link_to_agents()?;
+
+    Ok(())
+}
+
+/// Install from local bundled skills directory (for the default tap).
+/// Copies the skill directory from the bundled skills path to the destination.
+fn install_from_local(skill_name: &str, dest: &std::path::Path) -> Result<()> {
+    let skills_dir = get_embedded_skills_dir()?;
+    let source = skills_dir.join(skill_name);
+
+    if !source.exists() {
+        anyhow::bail!(
+            "skill '{}' not found in bundled skills at {}",
+            skill_name,
+            source.display()
+        );
+    }
+
+    // Remove destination if it exists (clean reinstall)
+    if dest.exists() {
+        std::fs::remove_dir_all(dest)?;
+    }
+    std::fs::create_dir_all(dest)?;
+
+    // Recursively copy the skill directory
+    copy_dir_contents(&source, dest)?;
 
     Ok(())
 }
@@ -362,16 +415,32 @@ pub fn update_skill(full_name: Option<&str>) -> Result<()> {
             }
         };
 
+        let install_dir = get_skills_install_dir()?;
+        let dest = install_dir.join(&installed.tap).join(&installed.skill);
+        let is_default_tap = tap.is_default || installed.tap == DEFAULT_TAP_NAME;
+
+        // For default tap skills installed locally (commit=None), refresh from local bundled dir.
+        // These are never compared by commit SHA, so always attempt a local-first refresh.
+        if is_default_tap && installed.commit.is_none() {
+            match install_from_local(&installed.skill, &dest) {
+                Ok(()) => {
+                    println!("  {} {} (bundled, refreshed)", "✓".green(), skill_name);
+                    updated_count += 1;
+                }
+                Err(e) => {
+                    println!("  {} {} ({})", "✗".red(), skill_name, e);
+                }
+            }
+            continue;
+        }
+
         // Check if update needed
         if installed.commit.as_deref() == Some(&latest_commit) {
             println!("  {} {} (up to date)", "✓".green(), skill_name);
             continue;
         }
 
-        // Perform update
-        let install_dir = get_skills_install_dir()?;
-        let dest = install_dir.join(&installed.tap).join(&installed.skill);
-
+        // Perform update via network
         match install_from_remote(&tap.url, &skill_entry.path, &dest, Some(&latest_commit)) {
             Ok((new_commit, _)) => {
                 // Update database
@@ -763,4 +832,57 @@ fn install_all_from_tap_internal(db: &super::models::Database, tap_name: &str) -
     }
 
     Ok(installed_count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn test_install_from_local_nonexistent_skill_returns_error() {
+        // A definitely-nonexistent skill name: install_from_local should error
+        let tmp = std::env::temp_dir().join("skillshub_test_dest_nonexistent");
+        let result = install_from_local("__nonexistent_test_skill_xyz__", &tmp);
+        // Either the embedded dir is not found (Ok path fails) or skill is not in it
+        assert!(
+            result.is_err(),
+            "install_from_local should fail for a nonexistent skill"
+        );
+    }
+
+    #[test]
+    fn test_copy_dir_contents_copies_tree() {
+        use tempfile::TempDir;
+        let src = TempDir::new().unwrap();
+        let dst = TempDir::new().unwrap();
+
+        // Create a nested structure in src
+        fs::create_dir_all(src.path().join("subdir")).unwrap();
+        fs::write(src.path().join("file.txt"), b"hello").unwrap();
+        fs::write(src.path().join("subdir/nested.txt"), b"world").unwrap();
+
+        copy_dir_contents(src.path(), dst.path()).unwrap();
+
+        assert!(dst.path().join("file.txt").exists());
+        assert!(dst.path().join("subdir/nested.txt").exists());
+        assert_eq!(fs::read(dst.path().join("file.txt")).unwrap(), b"hello");
+        assert_eq!(fs::read(dst.path().join("subdir/nested.txt")).unwrap(), b"world");
+    }
+
+    #[test]
+    fn test_copy_dir_contents_handles_empty_dir() {
+        use tempfile::TempDir;
+        let src = TempDir::new().unwrap();
+        let dst = TempDir::new().unwrap();
+
+        // Empty source should produce no error and empty destination
+        copy_dir_contents(src.path(), dst.path()).unwrap();
+
+        let entries: Vec<_> = fs::read_dir(dst.path()).unwrap().collect();
+        assert!(
+            entries.is_empty(),
+            "destination should be empty after copying empty source"
+        );
+    }
 }
