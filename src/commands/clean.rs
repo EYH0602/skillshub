@@ -4,7 +4,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
 
-use crate::agent::{AgentInfo, discover_agents};
+use crate::agent::{discover_agents, AgentInfo};
 use crate::paths::{display_path_with_tilde, get_skills_install_dir, get_skillshub_home};
 use crate::registry::db::{get_db_path, init_db, save_db};
 
@@ -340,7 +340,10 @@ mod tests {
         assert!(result.is_ok(), "clean_all returned error: {:?}", result);
 
         // The managed symlink should be gone
-        assert!(!link_path.exists() && !link_path.is_symlink(), "managed symlink should be removed");
+        assert!(
+            !link_path.exists() && !link_path.is_symlink(),
+            "managed symlink should be removed"
+        );
 
         // The skillshub home directory should be deleted
         assert!(!skillshub_home.exists(), "skillshub home should be deleted");
@@ -361,7 +364,11 @@ mod tests {
         let result = clean_all(true);
         restore_test_home(prev);
 
-        assert!(result.is_ok(), "clean_all should not error when skillshub home is missing: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "clean_all should not error when skillshub home is missing: {:?}",
+            result
+        );
     }
 
     /// Symlinks that point to non-skillshub targets are preserved by `clean_all`.
@@ -402,7 +409,10 @@ mod tests {
         assert!(result.is_ok(), "clean_all returned error: {:?}", result);
 
         // The external symlink should still be present
-        assert!(link_path.is_symlink(), "external symlink should NOT be removed by clean_all");
+        assert!(
+            link_path.is_symlink(),
+            "external symlink should NOT be removed by clean_all"
+        );
     }
 
     // ---------------------------------------------------------------------------
