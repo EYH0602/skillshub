@@ -709,10 +709,7 @@ pub fn show_skill_info(full_name: &str) -> Result<()> {
     );
 
     // Read versioning metadata from installed SKILL.md when available
-    let skill_md_path = install_dir
-        .join(&skill_id.tap)
-        .join(&skill_id.skill)
-        .join("SKILL.md");
+    let skill_md_path = install_dir.join(&skill_id.tap).join(&skill_id.skill).join("SKILL.md");
     let version_meta = if skill_md_path.exists() {
         parse_skill_metadata(&skill_md_path).ok()
     } else {
