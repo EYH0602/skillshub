@@ -47,7 +47,7 @@ skillshub/
 - **Installation**: Skills are downloaded/copied to `~/.skillshub/skills/<owner>/<repo>/<skill>/`
 - **Linking**: Per-skill symlinks are created from agent skill directories
 - **External Skills**: Skills installed through other means (marketplace, manual) are discovered and synced
-- **Agents**: Coding assistants like Claude, Codex, OpenCode, Aider, Cursor, Continue
+- **Agents**: Coding assistants like Claude, Codex, OpenCode, Aider, Cursor, Continue, Trae, Kimi
 
 ## Data Flow
 
