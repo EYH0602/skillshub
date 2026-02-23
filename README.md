@@ -190,6 +190,7 @@ Skillshub automatically detects and links to these coding agents:
 | Cursor   | `~/.cursor`    | `~/.cursor/skills`    |
 | Continue | `~/.continue`  | `~/.continue/skills`  |
 | Trae     | `~/.trae`      | `~/.trae/skills`      |
+| Kimi     | `~/.kimi`      | `~/.kimi/skills`      |
 | OpenClaw | `~/.openclaw`  | `~/.openclaw/skills`  |
 | ZeroClaw | `~/.zeroclaw`  | `~/.zeroclaw/skills`  |
 
