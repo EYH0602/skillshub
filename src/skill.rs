@@ -3,6 +3,13 @@ use serde::Deserialize;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// Optional versioning/authorship metadata nested under `metadata:` in SKILL.md frontmatter
+#[derive(Debug, Deserialize, Default)]
+pub struct SkillVersionMetadata {
+    pub author: Option<String>,
+    pub version: Option<String>,
+}
+
 /// Skill metadata parsed from SKILL.md frontmatter
 #[derive(Debug, Deserialize)]
 pub struct SkillMetadata {
@@ -12,6 +19,9 @@ pub struct SkillMetadata {
     #[serde(default)]
     #[allow(dead_code)]
     pub allowed_tools: AllowedTools,
+    pub license: Option<String>,
+    #[serde(default)]
+    pub metadata: Option<SkillVersionMetadata>,
 }
 
 /// Flexible deserializer for allowed-tools (can be string or array)
@@ -206,6 +216,54 @@ allowed-tools:
 
         let metadata = parse_skill_metadata(&skill_md).unwrap();
         assert_eq!(metadata.allowed_tools.0, vec!["Tool1", "Tool2"]);
+    }
+
+    #[test]
+    fn test_parse_skill_metadata_with_license_and_version_metadata() {
+        let dir = TempDir::new().unwrap();
+        let skill_md = dir.path().join("SKILL.md");
+        fs::write(
+            &skill_md,
+            r#"---
+name: pdf-processing
+description: Extract text from PDF files.
+license: Apache-2.0
+metadata:
+  author: example-org
+  version: "1.0"
+---
+# PDF Processing
+"#,
+        )
+        .unwrap();
+
+        let metadata = parse_skill_metadata(&skill_md).unwrap();
+        assert_eq!(metadata.name, "pdf-processing");
+        assert_eq!(metadata.description, Some("Extract text from PDF files.".to_string()));
+        assert_eq!(metadata.license, Some("Apache-2.0".to_string()));
+        let vm = metadata.metadata.unwrap();
+        assert_eq!(vm.author, Some("example-org".to_string()));
+        assert_eq!(vm.version, Some("1.0".to_string()));
+    }
+
+    #[test]
+    fn test_parse_skill_metadata_optional_fields_absent() {
+        let dir = TempDir::new().unwrap();
+        let skill_md = dir.path().join("SKILL.md");
+        fs::write(
+            &skill_md,
+            r#"---
+name: minimal-skill
+---
+# Minimal
+"#,
+        )
+        .unwrap();
+
+        let metadata = parse_skill_metadata(&skill_md).unwrap();
+        assert_eq!(metadata.name, "minimal-skill");
+        assert!(metadata.license.is_none());
+        assert!(metadata.metadata.is_none());
     }
 
     #[test]
