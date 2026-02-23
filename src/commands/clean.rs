@@ -5,7 +5,7 @@ use std::io::{self, Write};
 use std::path::Path;
 
 use crate::agent::discover_agents;
-use crate::paths::{display_path_with_tilde, get_skillshub_home, get_skills_install_dir};
+use crate::paths::{display_path_with_tilde, get_skills_install_dir, get_skillshub_home};
 use crate::registry::db::{get_db_path, init_db, save_db};
 
 /// Clear cached registry data from all taps
@@ -154,7 +154,12 @@ pub fn clean_all(confirm: bool) -> Result<()> {
     let agents = discover_agents();
 
     // --- Print warning and summary ---
-    println!("{}", "WARNING: This will completely remove skillshub from your system.".yellow().bold());
+    println!(
+        "{}",
+        "WARNING: This will completely remove skillshub from your system."
+            .yellow()
+            .bold()
+    );
     println!();
     println!("{} The following will be deleted:", "=>".green().bold());
     println!(
@@ -164,20 +169,10 @@ pub fn clean_all(confirm: bool) -> Result<()> {
     for agent in &agents {
         let agent_name = agent.path.file_name().unwrap().to_string_lossy();
         let skills_path = agent.path.join(agent.skills_subdir);
-        println!(
-            "      {} ({})",
-            agent_name,
-            display_path_with_tilde(&skills_path)
-        );
+        println!("      {} ({})", agent_name, display_path_with_tilde(&skills_path));
     }
-    println!(
-        "  - Installed skills: {}",
-        display_path_with_tilde(&skills_dir)
-    );
-    println!(
-        "  - Database: {}",
-        display_path_with_tilde(&db_path)
-    );
+    println!("  - Installed skills: {}", display_path_with_tilde(&skills_dir));
+    println!("  - Database: {}", display_path_with_tilde(&db_path));
     println!(
         "  - Skillshub home directory: {}",
         display_path_with_tilde(&skillshub_home)
@@ -258,11 +253,7 @@ pub fn clean_all(confirm: bool) -> Result<()> {
 
     if skillshub_home.exists() {
         fs::remove_dir_all(&skillshub_home)?;
-        println!(
-            "  {} Removed {}",
-            "✓".green(),
-            display_path_with_tilde(&skillshub_home)
-        );
+        println!("  {} Removed {}", "✓".green(), display_path_with_tilde(&skillshub_home));
     } else {
         println!(
             "  {} {} does not exist, nothing to remove",

@@ -10,7 +10,9 @@ use anyhow::Result;
 use clap::Parser;
 
 use cli::{CleanCommands, Cli, Commands, ExternalCommands, TapCommands};
-use commands::{clean_all, clean_cache, clean_links, external_forget, external_list, external_scan, link_to_agents, show_agents};
+use commands::{
+    clean_all, clean_cache, clean_links, external_forget, external_list, external_scan, link_to_agents, show_agents,
+};
 use registry::{
     add_skill_from_url, add_tap, import_star_list, install_all, install_all_from_tap, install_skill, list_skills,
     list_taps, migrate_old_installations, needs_migration, remove_tap, search_skills, show_skill_info, uninstall_skill,
