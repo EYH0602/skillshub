@@ -175,7 +175,15 @@ skillshub clean links
 
 # Remove symlinks AND delete all installed skills
 skillshub clean links --remove-skills
+
+# Completely remove all skillshub state (full uninstall/purge)
+skillshub clean all
+
+# Skip the interactive confirmation prompt (useful for scripts/CI)
+skillshub clean all --confirm
 ```
+
+The `clean all` command is a full uninstall/purge: it removes all skillshub-managed symlinks from every detected agent directory, then deletes the entire `~/.skillshub/` directory (including all installed skills and the database). Without `--confirm`, it prints a summary of what will be removed and prompts you to type `yes` to proceed.
 
 ## Supported Agents
 

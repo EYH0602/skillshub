@@ -145,9 +145,13 @@ External skills are skills found in agent directories that weren't installed via
 skillshub clean cache                       # Clear cached registry data from taps
 skillshub clean links                       # Remove all skillshub-managed symlinks
 skillshub clean links --remove-skills       # Remove symlinks AND delete all installed skills
+skillshub clean all                         # Full uninstall: remove all skillshub state
+skillshub clean all --confirm               # Skip interactive confirmation prompt
 ```
 
 The `clean cache` command clears cached tap registries, forcing a fresh fetch on next update. The `clean links` command removes all symlinks that skillshub created in agent directories. With `--remove-skills`, it also deletes all installed skills from `~/.skillshub/skills/`.
+
+The `clean all` command is a full uninstall/purge: it removes all managed symlinks from every detected agent directory, then deletes the entire `~/.skillshub/` directory (skills, database, and all other data). Without `--confirm`, it prints a summary and requires typing `yes` to proceed.
 
 ### Migration
 ```bash

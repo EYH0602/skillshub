@@ -1,11 +1,12 @@
 use anyhow::Result;
 use colored::Colorize;
 use std::fs;
+use std::io::{self, Write};
 use std::path::Path;
 
 use crate::agent::discover_agents;
-use crate::paths::{display_path_with_tilde, get_skills_install_dir};
-use crate::registry::db::{init_db, save_db};
+use crate::paths::{display_path_with_tilde, get_skillshub_home, get_skills_install_dir};
+use crate::registry::db::{get_db_path, init_db, save_db};
 
 /// Clear cached registry data from all taps
 pub fn clean_cache() -> Result<()> {
@@ -139,6 +140,142 @@ pub fn clean_links(remove_skills: bool) -> Result<()> {
     } else {
         println!("\n{} No skillshub-managed links to remove", "Info:".cyan());
     }
+
+    Ok(())
+}
+
+/// Completely remove all skillshub-managed state (full uninstall/purge).
+/// Removes all managed symlinks from agent directories, then deletes ~/.skillshub/ entirely.
+/// If confirm is false, prints a summary and prompts the user to type 'yes' before proceeding.
+pub fn clean_all(confirm: bool) -> Result<()> {
+    let skillshub_home = get_skillshub_home()?;
+    let skills_dir = get_skills_install_dir()?;
+    let db_path = get_db_path()?;
+    let agents = discover_agents();
+
+    // --- Print warning and summary ---
+    println!("{}", "WARNING: This will completely remove skillshub from your system.".yellow().bold());
+    println!();
+    println!("{} The following will be deleted:", "=>".green().bold());
+    println!(
+        "  - All skillshub-managed symlinks from {} detected agent(s)",
+        agents.len()
+    );
+    for agent in &agents {
+        let agent_name = agent.path.file_name().unwrap().to_string_lossy();
+        let skills_path = agent.path.join(agent.skills_subdir);
+        println!(
+            "      {} ({})",
+            agent_name,
+            display_path_with_tilde(&skills_path)
+        );
+    }
+    println!(
+        "  - Installed skills: {}",
+        display_path_with_tilde(&skills_dir)
+    );
+    println!(
+        "  - Database: {}",
+        display_path_with_tilde(&db_path)
+    );
+    println!(
+        "  - Skillshub home directory: {}",
+        display_path_with_tilde(&skillshub_home)
+    );
+
+    // --- Confirmation prompt ---
+    if !confirm {
+        println!();
+        print!("Confirm: Type 'yes' to confirm: ");
+        io::stdout().flush()?;
+
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        let trimmed = input.trim();
+
+        if trimmed != "yes" {
+            println!("{}", "Cancelled. Nothing was removed.".yellow());
+            return Ok(());
+        }
+    }
+
+    println!();
+    println!("{} Starting full uninstall...", "=>".green().bold());
+
+    // --- Remove symlinks ---
+    println!("  {} Removing skillshub-managed symlinks...", "=>".green().bold());
+
+    let skills_dir_canonical = skills_dir.canonicalize().unwrap_or_else(|_| skills_dir.clone());
+    let mut total_removed = 0;
+
+    for agent in &agents {
+        let agent_name = agent.path.file_name().unwrap().to_string_lossy();
+        let skills_path = agent.path.join(agent.skills_subdir);
+
+        if !skills_path.exists() {
+            continue;
+        }
+
+        let mut removed_count = 0;
+
+        if let Ok(entries) = fs::read_dir(&skills_path) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+
+                if !path.is_symlink() {
+                    continue;
+                }
+
+                if is_skillshub_managed_link(&path, &skills_dir_canonical) {
+                    if let Err(e) = fs::remove_file(&path) {
+                        eprintln!("     {} Failed to remove {}: {}", "!".red(), path.display(), e);
+                    } else {
+                        removed_count += 1;
+                    }
+                }
+            }
+        }
+
+        if removed_count > 0 {
+            println!(
+                "     {} {} ({} link(s) removed)",
+                "✓".green(),
+                agent_name,
+                removed_count
+            );
+            total_removed += removed_count;
+        }
+    }
+
+    println!("  {} Removed {} symlink(s) total", "✓".green(), total_removed);
+
+    // --- Remove ~/.skillshub/ directory entirely ---
+    println!(
+        "  {} Removing {} ...",
+        "=>".green().bold(),
+        display_path_with_tilde(&skillshub_home)
+    );
+
+    if skillshub_home.exists() {
+        fs::remove_dir_all(&skillshub_home)?;
+        println!(
+            "  {} Removed {}",
+            "✓".green(),
+            display_path_with_tilde(&skillshub_home)
+        );
+    } else {
+        println!(
+            "  {} {} does not exist, nothing to remove",
+            "Info:".cyan(),
+            display_path_with_tilde(&skillshub_home)
+        );
+    }
+
+    println!();
+    println!(
+        "{} Skillshub has been completely removed from your system.",
+        "Done!".green().bold()
+    );
 
     Ok(())
 }
