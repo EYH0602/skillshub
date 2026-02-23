@@ -223,11 +223,20 @@ fn count_installed_skills(db: &Database, tap_name: &str) -> usize {
     db::get_skills_from_tap(db, tap_name).len()
 }
 
-/// Format installed/available skill counts for display
+/// Format installed/available skill counts for display.
+///
+/// When the installed count exceeds the available count the cache is likely
+/// stale (the remote tap has had skills removed since the last `tap update`).
+/// In that case we show "?" for the available count rather than an impossible
+/// "installed > available" display such as "2/1".
 fn format_skills_count(installed: usize, available: Option<usize>) -> String {
-    let available_display = available
-        .map(|count| count.to_string())
-        .unwrap_or_else(|| "?".to_string());
+    let available_display = match available {
+        // Cache is stale or count is inconsistent — show "?" so the user
+        // knows to run `skillshub tap update` to refresh the registry.
+        Some(count) if installed > count => "?".to_string(),
+        Some(count) => count.to_string(),
+        None => "?".to_string(),
+    };
     format!("{}/{}", installed, available_display)
 }
 
@@ -372,6 +381,25 @@ mod tests {
     #[test]
     fn test_format_skills_count_unknown() {
         assert_eq!(format_skills_count(1, None), "1/?");
+    }
+
+    #[test]
+    fn test_format_skills_count_inconsistent() {
+        // installed > available means the cache is stale — show "?" for available
+        assert_eq!(format_skills_count(2, Some(1)), "2/?");
+        assert_eq!(format_skills_count(17, Some(15)), "17/?");
+    }
+
+    #[test]
+    fn test_format_skills_count_equal() {
+        // installed == available is fine
+        assert_eq!(format_skills_count(5, Some(5)), "5/5");
+    }
+
+    #[test]
+    fn test_format_skills_count_zero_installed() {
+        assert_eq!(format_skills_count(0, Some(3)), "0/3");
+        assert_eq!(format_skills_count(0, None), "0/?");
     }
 
     #[test]
