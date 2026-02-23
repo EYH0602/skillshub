@@ -118,7 +118,7 @@ impl MockGitHub {
                         "message": "API rate limit exceeded"
                     }))
                     .insert_header("X-RateLimit-Remaining", "0")
-                    .insert_header("X-RateLimit-Reset", &reset_ts),
+                    .insert_header("X-RateLimit-Reset", reset_ts.as_str()),
             )
             .mount(&self.server)
             .await;
@@ -144,7 +144,7 @@ impl MockGitHub {
                         "message": "API rate limit exceeded"
                     }))
                     .insert_header("X-RateLimit-Remaining", "0")
-                    .insert_header("X-RateLimit-Reset", &reset_ts),
+                    .insert_header("X-RateLimit-Reset", reset_ts.as_str()),
             )
             .expect(fail_count)
             .mount(&self.server)

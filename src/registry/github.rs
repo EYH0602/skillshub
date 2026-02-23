@@ -1265,7 +1265,7 @@ name: minimal-skill
                 .respond_with(
                     wiremock::ResponseTemplate::new(403)
                         .insert_header("X-RateLimit-Remaining", "0")
-                        .insert_header("X-RateLimit-Reset", &reset_ts)
+                        .insert_header("X-RateLimit-Reset", reset_ts.as_str())
                         .set_body_string("rate limited"),
                 )
                 .up_to_n_times(1)
