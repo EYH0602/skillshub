@@ -72,15 +72,17 @@ GitHub Tap Repository          Local Database           Installed Skills
 
 Each agent has its own skills subdirectory name:
 
-| Agent    | Directory     | Skills Path          |
-| -------- | ------------- | -------------------- |
-| Claude   | `~/.claude`   | `~/.claude/skills`   |
-| Codex    | `~/.codex`    | `~/.codex/skills`    |
-| OpenCode | `~/.opencode` | `~/.opencode/skill`  |
-| Aider    | `~/.aider`    | `~/.aider/skills`    |
-| Cursor   | `~/.cursor`   | `~/.cursor/skills`   |
-| Continue | `~/.continue` | `~/.continue/skills` |
-| Trae     | `~/.trae`     | `~/.trae/skills`     |
+| Agent    | Directory      | Skills Path           |
+| -------- | -------------- | --------------------- |
+| Claude   | `~/.claude`    | `~/.claude/skills`    |
+| Codex    | `~/.codex`     | `~/.codex/skills`     |
+| OpenCode | `~/.opencode`  | `~/.opencode/skill`   |
+| Aider    | `~/.aider`     | `~/.aider/skills`     |
+| Cursor   | `~/.cursor`    | `~/.cursor/skills`    |
+| Continue | `~/.continue`  | `~/.continue/skills`  |
+| Trae     | `~/.trae`      | `~/.trae/skills`      |
+| OpenClaw | `~/.openclaw`  | `~/.openclaw/skills`  |
+| ZeroClaw | `~/.zeroclaw`  | `~/.zeroclaw/skills`  |
 
 ## CLI Commands
 
