@@ -4,7 +4,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
 
-use crate::agent::discover_agents;
+use crate::agent::{AgentInfo, discover_agents};
 use crate::paths::{display_path_with_tilde, get_skills_install_dir, get_skillshub_home};
 use crate::registry::db::{get_db_path, init_db, save_db};
 
@@ -35,6 +35,55 @@ pub fn clean_cache() -> Result<()> {
     Ok(())
 }
 
+/// Remove all skillshub-managed symlinks from all detected agent directories.
+/// Returns the total number of symlinks removed.
+fn remove_managed_symlinks(agents: &[AgentInfo], skills_dir_canonical: &Path) -> usize {
+    let mut total_removed = 0;
+
+    for agent in agents {
+        let agent_name = agent
+            .path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| agent.path.display().to_string());
+        let skills_path = agent.path.join(agent.skills_subdir);
+
+        if !skills_path.exists() {
+            continue;
+        }
+
+        let mut removed_count = 0;
+
+        // Scan entries in the agent's skills directory
+        if let Ok(entries) = fs::read_dir(&skills_path) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+
+                // Only process symlinks
+                if !path.is_symlink() {
+                    continue;
+                }
+
+                // Check if symlink points to skillshub-managed directory
+                if is_skillshub_managed_link(&path, skills_dir_canonical) {
+                    if let Err(e) = fs::remove_file(&path) {
+                        eprintln!("  {} Failed to remove {}: {}", "!".red(), path.display(), e);
+                    } else {
+                        removed_count += 1;
+                    }
+                }
+            }
+        }
+
+        if removed_count > 0 {
+            println!("  {} {} (removed {} link(s))", "✓".green(), agent_name, removed_count);
+            total_removed += removed_count;
+        }
+    }
+
+    total_removed
+}
+
 /// Remove all skillshub-managed symlinks from agent directories
 /// If remove_skills is true, also delete all installed skills
 pub fn clean_links(remove_skills: bool) -> Result<()> {
@@ -55,44 +104,7 @@ pub fn clean_links(remove_skills: bool) -> Result<()> {
         agents.len()
     );
 
-    let mut total_removed = 0;
-
-    for agent in &agents {
-        let agent_name = agent.path.file_name().unwrap().to_string_lossy();
-        let skills_path = agent.path.join(agent.skills_subdir);
-
-        if !skills_path.exists() {
-            continue;
-        }
-
-        let mut removed_count = 0;
-
-        // Scan entries in the agent's skills directory
-        if let Ok(entries) = fs::read_dir(&skills_path) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-
-                // Only process symlinks
-                if !path.is_symlink() {
-                    continue;
-                }
-
-                // Check if symlink points to skillshub-managed directory
-                if is_skillshub_managed_link(&path, &skills_dir_canonical) {
-                    if let Err(e) = fs::remove_file(&path) {
-                        eprintln!("  {} Failed to remove {}: {}", "!".red(), path.display(), e);
-                    } else {
-                        removed_count += 1;
-                    }
-                }
-            }
-        }
-
-        if removed_count > 0 {
-            println!("  {} {} (removed {} link(s))", "✓".green(), agent_name, removed_count);
-            total_removed += removed_count;
-        }
-    }
+    let total_removed = remove_managed_symlinks(&agents, &skills_dir_canonical);
 
     // Clear linked_agents from database
     db.linked_agents.clear();
@@ -167,7 +179,11 @@ pub fn clean_all(confirm: bool) -> Result<()> {
         agents.len()
     );
     for agent in &agents {
-        let agent_name = agent.path.file_name().unwrap().to_string_lossy();
+        let agent_name = agent
+            .path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| agent.path.display().to_string());
         let skills_path = agent.path.join(agent.skills_subdir);
         println!("      {} ({})", agent_name, display_path_with_tilde(&skills_path));
     }
@@ -201,46 +217,7 @@ pub fn clean_all(confirm: bool) -> Result<()> {
     println!("  {} Removing skillshub-managed symlinks...", "=>".green().bold());
 
     let skills_dir_canonical = skills_dir.canonicalize().unwrap_or_else(|_| skills_dir.clone());
-    let mut total_removed = 0;
-
-    for agent in &agents {
-        let agent_name = agent.path.file_name().unwrap().to_string_lossy();
-        let skills_path = agent.path.join(agent.skills_subdir);
-
-        if !skills_path.exists() {
-            continue;
-        }
-
-        let mut removed_count = 0;
-
-        if let Ok(entries) = fs::read_dir(&skills_path) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-
-                if !path.is_symlink() {
-                    continue;
-                }
-
-                if is_skillshub_managed_link(&path, &skills_dir_canonical) {
-                    if let Err(e) = fs::remove_file(&path) {
-                        eprintln!("     {} Failed to remove {}: {}", "!".red(), path.display(), e);
-                    } else {
-                        removed_count += 1;
-                    }
-                }
-            }
-        }
-
-        if removed_count > 0 {
-            println!(
-                "     {} {} ({} link(s) removed)",
-                "✓".green(),
-                agent_name,
-                removed_count
-            );
-            total_removed += removed_count;
-        }
-    }
+    let total_removed = remove_managed_symlinks(&agents, &skills_dir_canonical);
 
     println!("  {} Removed {} symlink(s) total", "✓".green(), total_removed);
 
@@ -300,8 +277,137 @@ fn is_skillshub_managed_link(link_path: &Path, skillshub_skills_dir: &Path) -> b
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use std::fs;
     use tempfile::TempDir;
+
+    // ---------------------------------------------------------------------------
+    // Helpers
+    // ---------------------------------------------------------------------------
+
+    /// Set SKILLSHUB_TEST_HOME to `home` and return the previous value so the
+    /// caller can restore it.
+    fn set_test_home(home: &std::path::Path) -> Option<String> {
+        let prev = std::env::var("SKILLSHUB_TEST_HOME").ok();
+        std::env::set_var("SKILLSHUB_TEST_HOME", home);
+        prev
+    }
+
+    fn restore_test_home(prev: Option<String>) {
+        match prev {
+            Some(v) => std::env::set_var("SKILLSHUB_TEST_HOME", v),
+            None => std::env::remove_var("SKILLSHUB_TEST_HOME"),
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // clean_all tests
+    // ---------------------------------------------------------------------------
+
+    /// `clean_all(true)` with --confirm removes managed symlinks and deletes the
+    /// skillshub home directory.
+    #[test]
+    #[serial]
+    #[cfg(unix)]
+    fn test_clean_all_confirm_removes_symlinks_and_skillshub_home() {
+        let temp = TempDir::new().unwrap();
+        let home = temp.path().join("home");
+
+        // Create fake ~/.skillshub/skills/tap/skill
+        let skillshub_home = home.join(".skillshub");
+        let skills_dir = skillshub_home.join("skills");
+        let skill_dir = skills_dir.join("tap").join("skill");
+        fs::create_dir_all(&skill_dir).unwrap();
+
+        // Create a minimal db.json so init_db() doesn't fail
+        fs::write(
+            skillshub_home.join("db.json"),
+            r#"{"taps":{},"installed":{},"linked_agents":[],"external_skills":{}}"#,
+        )
+        .unwrap();
+
+        // Create fake ~/.claude/skills with a managed symlink
+        let claude_skills = home.join(".claude").join("skills");
+        fs::create_dir_all(&claude_skills).unwrap();
+        let link_path = claude_skills.join("skill");
+        std::os::unix::fs::symlink(&skill_dir, &link_path).unwrap();
+        assert!(link_path.is_symlink());
+
+        let prev = set_test_home(&home);
+        let result = clean_all(true);
+        restore_test_home(prev);
+
+        assert!(result.is_ok(), "clean_all returned error: {:?}", result);
+
+        // The managed symlink should be gone
+        assert!(!link_path.exists() && !link_path.is_symlink(), "managed symlink should be removed");
+
+        // The skillshub home directory should be deleted
+        assert!(!skillshub_home.exists(), "skillshub home should be deleted");
+    }
+
+    /// `clean_all(true)` gracefully handles a missing `~/.skillshub/` directory
+    /// (should not error out).
+    #[test]
+    #[serial]
+    fn test_clean_all_missing_skillshub_home_does_not_error() {
+        let temp = TempDir::new().unwrap();
+        let home = temp.path().join("home");
+
+        // Do NOT create ~/.skillshub at all; only create the home directory itself
+        fs::create_dir_all(&home).unwrap();
+
+        let prev = set_test_home(&home);
+        let result = clean_all(true);
+        restore_test_home(prev);
+
+        assert!(result.is_ok(), "clean_all should not error when skillshub home is missing: {:?}", result);
+    }
+
+    /// Symlinks that point to non-skillshub targets are preserved by `clean_all`.
+    #[test]
+    #[serial]
+    #[cfg(unix)]
+    fn test_clean_all_preserves_non_skillshub_symlinks() {
+        let temp = TempDir::new().unwrap();
+        let home = temp.path().join("home");
+
+        // Create fake ~/.skillshub/skills
+        let skillshub_home = home.join(".skillshub");
+        let skills_dir = skillshub_home.join("skills");
+        fs::create_dir_all(&skills_dir).unwrap();
+
+        // Create a minimal db.json
+        fs::write(
+            skillshub_home.join("db.json"),
+            r#"{"taps":{},"installed":{},"linked_agents":[],"external_skills":{}}"#,
+        )
+        .unwrap();
+
+        // Create an external (non-skillshub) skill directory
+        let external_skill = temp.path().join("external").join("my-skill");
+        fs::create_dir_all(&external_skill).unwrap();
+
+        // Create fake ~/.claude/skills with a symlink to the external skill
+        let claude_skills = home.join(".claude").join("skills");
+        fs::create_dir_all(&claude_skills).unwrap();
+        let link_path = claude_skills.join("my-skill");
+        std::os::unix::fs::symlink(&external_skill, &link_path).unwrap();
+        assert!(link_path.is_symlink());
+
+        let prev = set_test_home(&home);
+        let result = clean_all(true);
+        restore_test_home(prev);
+
+        assert!(result.is_ok(), "clean_all returned error: {:?}", result);
+
+        // The external symlink should still be present
+        assert!(link_path.is_symlink(), "external symlink should NOT be removed by clean_all");
+    }
+
+    // ---------------------------------------------------------------------------
+    // is_skillshub_managed_link tests
+    // ---------------------------------------------------------------------------
 
     #[test]
     fn test_is_skillshub_managed_link_true() {
