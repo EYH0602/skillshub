@@ -214,9 +214,25 @@ Each skill has a `SKILL.md` with YAML frontmatter:
 name: skill-name
 description: What this skill does
 allowed-tools: Tool1, Tool2 # Optional, comma-separated or array
+license: MIT                # Optional, SPDX identifier
+metadata:                   # Optional nested block
+  author: my-org
+  version: "1.0"
 ---
 # Skill instructions in markdown...
 ```
+
+Required fields:
+- `name` - The skill identifier
+
+Optional fields:
+- `description` - What this skill does and when to use it
+- `allowed-tools` - Comma-separated string or YAML array of allowed tool names
+- `license` - SPDX license identifier (e.g. `MIT`, `Apache-2.0`)
+- `metadata.author` - Author or organization name
+- `metadata.version` - Semantic version string (e.g. `"1.0"`)
+
+The `license`, `metadata.author`, and `metadata.version` fields are displayed by `skillshub info` when present.
 
 Optional subdirectories:
 

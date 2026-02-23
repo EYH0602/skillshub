@@ -12,7 +12,7 @@ use super::models::{InstalledSkill, SkillId};
 use super::tap::get_tap_registry;
 use crate::commands::link_to_agents;
 use crate::paths::{get_embedded_skills_dir, get_skills_install_dir};
-use crate::skill::discover_skills;
+use crate::skill::{discover_skills, parse_skill_metadata};
 use crate::util::truncate_string;
 
 const DESCRIPTION_MAX_LEN: usize = 50;
@@ -707,6 +707,31 @@ pub fn show_skill_info(full_name: &str) -> Result<()> {
             "Not installed".yellow().to_string()
         }
     );
+
+    // Read versioning metadata from installed SKILL.md when available
+    let skill_md_path = install_dir
+        .join(&skill_id.tap)
+        .join(&skill_id.skill)
+        .join("SKILL.md");
+    let version_meta = if skill_md_path.exists() {
+        parse_skill_metadata(&skill_md_path).ok()
+    } else {
+        None
+    };
+
+    if let Some(ref meta) = version_meta {
+        if let Some(ref license) = meta.license {
+            println!("  {}: {}", "License".cyan(), license);
+        }
+        if let Some(ref vm) = meta.metadata {
+            if let Some(ref author) = vm.author {
+                println!("  {}: {}", "Author".cyan(), author);
+            }
+            if let Some(ref version) = vm.version {
+                println!("  {}: {}", "Version".cyan(), version);
+            }
+        }
+    }
 
     if let Some(inst) = installed {
         if let Some(commit) = &inst.commit {

@@ -1,6 +1,10 @@
 ---
 name: fuzzing
 description: Design, implement, debug, and maintain fuzzers for security testing. Use when building coverage-guided fuzzers (LibAFL, AFL++, LibFuzzer), writing fuzz targets/harnesses, debugging why a fuzzer isn't finding bugs or coverage isn't increasing, analyzing and triaging crashes, implementing mutation strategies, or working with grammar-based fuzzing for structured inputs.
+license: MIT
+metadata:
+  author: EYH0602
+  version: "1.0"
 ---
 
 # Fuzzing
