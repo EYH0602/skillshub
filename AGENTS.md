@@ -81,6 +81,7 @@ Each agent has its own skills subdirectory name:
 | Cursor   | `~/.cursor`   | `~/.cursor/skills`   |
 | Continue | `~/.continue` | `~/.continue/skills` |
 | Trae     | `~/.trae`     | `~/.trae/skills`     |
+| Kimi     | `~/.kimi`     | `~/.kimi/skills`     |
 
 ## CLI Commands
 
