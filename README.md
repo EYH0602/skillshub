@@ -181,16 +181,18 @@ skillshub clean links --remove-skills
 
 Skillshub automatically detects and links to these coding agents:
 
-| Agent    | Directory     | Skills Path          |
-| -------- | ------------- | -------------------- |
-| Claude   | `~/.claude`   | `~/.claude/skills`   |
-| Codex    | `~/.codex`    | `~/.codex/skills`    |
-| OpenCode | `~/.opencode` | `~/.opencode/skill`  |
-| Aider    | `~/.aider`    | `~/.aider/skills`    |
-| Cursor   | `~/.cursor`   | `~/.cursor/skills`   |
-| Continue | `~/.continue` | `~/.continue/skills` |
-| Trae     | `~/.trae`     | `~/.trae/skills`     |
-| Kimi     | `~/.kimi`     | `~/.kimi/skills`     |
+| Agent    | Directory      | Skills Path           |
+| -------- | -------------- | --------------------- |
+| Claude   | `~/.claude`    | `~/.claude/skills`    |
+| Codex    | `~/.codex`     | `~/.codex/skills`     |
+| OpenCode | `~/.opencode`  | `~/.opencode/skill`   |
+| Aider    | `~/.aider`     | `~/.aider/skills`     |
+| Cursor   | `~/.cursor`    | `~/.cursor/skills`    |
+| Continue | `~/.continue`  | `~/.continue/skills`  |
+| Trae     | `~/.trae`      | `~/.trae/skills`      |
+| Kimi     | `~/.kimi`      | `~/.kimi/skills`      |
+| OpenClaw | `~/.openclaw`  | `~/.openclaw/skills`  |
+| ZeroClaw | `~/.zeroclaw`  | `~/.zeroclaw/skills`  |
 
 ## GitHub API Rate Limiting
 

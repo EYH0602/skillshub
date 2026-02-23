@@ -13,6 +13,8 @@ pub const KNOWN_AGENTS: &[(&str, &str)] = &[
     (".continue", "skills"),
     (".trae", "skills"),
     (".kimi", "skills"),
+    (".openclaw", "skills"),
+    (".zeroclaw", "skills"),
 ];
 
 /// Discovered agent info
@@ -82,6 +84,8 @@ mod tests {
         assert!(names.contains(".opencode"));
         assert!(names.contains(".trae"));
         assert!(names.contains(".kimi"));
+        assert!(names.contains(".openclaw"));
+        assert!(names.contains(".zeroclaw"));
     }
 
     #[test]
