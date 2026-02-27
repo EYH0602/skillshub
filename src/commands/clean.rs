@@ -1,11 +1,11 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use colored::Colorize;
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, BufRead, Write};
 use std::path::Path;
 
 use crate::agent::{discover_agents, AgentInfo};
-use crate::paths::{display_path_with_tilde, get_skills_install_dir, get_skillshub_home};
+use crate::paths::{display_path_with_tilde, get_home_dir, get_skills_install_dir, get_skillshub_home};
 use crate::registry::db::{get_db_path, init_db, save_db};
 
 /// Clear cached registry data from all taps
@@ -160,49 +160,53 @@ pub fn clean_links(remove_skills: bool) -> Result<()> {
 /// Removes all managed symlinks from agent directories, then deletes ~/.skillshub/ entirely.
 /// If confirm is false, prints a summary and prompts the user to type 'yes' before proceeding.
 pub fn clean_all(confirm: bool) -> Result<()> {
+    clean_all_with_input(confirm, &mut io::stdin().lock())
+}
+
+/// Inner implementation that accepts a reader, enabling tests to supply mock input.
+fn clean_all_with_input(confirm: bool, input: &mut impl BufRead) -> Result<()> {
     let skillshub_home = get_skillshub_home()?;
     let skills_dir = get_skills_install_dir()?;
     let db_path = get_db_path()?;
     let agents = discover_agents();
 
-    // --- Print warning and summary ---
-    println!(
-        "{}",
-        "WARNING: This will completely remove skillshub from your system."
-            .yellow()
-            .bold()
-    );
-    println!();
-    println!("{} The following will be deleted:", "=>".green().bold());
-    println!(
-        "  - All skillshub-managed symlinks from {} detected agent(s)",
-        agents.len()
-    );
-    for agent in &agents {
-        let agent_name = agent
-            .path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| agent.path.display().to_string());
-        let skills_path = agent.path.join(agent.skills_subdir);
-        println!("      {} ({})", agent_name, display_path_with_tilde(&skills_path));
-    }
-    println!("  - Installed skills: {}", display_path_with_tilde(&skills_dir));
-    println!("  - Database: {}", display_path_with_tilde(&db_path));
-    println!(
-        "  - Skillshub home directory: {}",
-        display_path_with_tilde(&skillshub_home)
-    );
-
-    // --- Confirmation prompt ---
+    // --- Interactive confirmation (only when --confirm is NOT passed) ---
     if !confirm {
+        println!(
+            "{}",
+            "WARNING: This will completely remove skillshub from your system."
+                .yellow()
+                .bold()
+        );
+        println!();
+        println!("{} The following will be deleted:", "=>".green().bold());
+        println!(
+            "  - All skillshub-managed symlinks from {} detected agent(s)",
+            agents.len()
+        );
+        for agent in &agents {
+            let agent_name = agent
+                .path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| agent.path.display().to_string());
+            let skills_path = agent.path.join(agent.skills_subdir);
+            println!("      {} ({})", agent_name, display_path_with_tilde(&skills_path));
+        }
+        println!("  - Installed skills: {}", display_path_with_tilde(&skills_dir));
+        println!("  - Database: {}", display_path_with_tilde(&db_path));
+        println!(
+            "  - Skillshub home directory: {}",
+            display_path_with_tilde(&skillshub_home)
+        );
+
         println!();
         print!("Confirm: Type 'yes' to confirm: ");
         io::stdout().flush()?;
 
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
-        let trimmed = input.trim();
+        let mut user_input = String::new();
+        input.read_line(&mut user_input)?;
+        let trimmed = user_input.trim();
 
         if trimmed != "yes" {
             println!("{}", "Cancelled. Nothing was removed.".yellow());
@@ -214,12 +218,25 @@ pub fn clean_all(confirm: bool) -> Result<()> {
     println!("{} Starting full uninstall...", "=>".green().bold());
 
     // --- Remove symlinks ---
+    // Derive canonical skills path from the home directory (which should exist)
+    // rather than canonicalizing the skills dir itself, which may not exist in a
+    // partially-cleaned state.
+    let home = get_home_dir().context("Could not determine home directory")?;
+    let home_canonical = home.canonicalize().unwrap_or_else(|_| home.clone());
+    let skills_dir_canonical = home_canonical.join(".skillshub").join("skills");
+
     println!("  {} Removing skillshub-managed symlinks...", "=>".green().bold());
-
-    let skills_dir_canonical = skills_dir.canonicalize().unwrap_or_else(|_| skills_dir.clone());
     let total_removed = remove_managed_symlinks(&agents, &skills_dir_canonical);
-
     println!("  {} Removed {} symlink(s) total", "✓".green(), total_removed);
+
+    // --- Save a clean database before destructive deletion ---
+    // This keeps db.json consistent with the filesystem if remove_dir_all fails
+    // partway (e.g. permission error).
+    if let Ok(mut db) = init_db() {
+        db.linked_agents.clear();
+        db.installed.clear();
+        let _ = save_db(&db);
+    }
 
     // --- Remove ~/.skillshub/ directory entirely ---
     println!(
@@ -413,6 +430,95 @@ mod tests {
             link_path.is_symlink(),
             "external symlink should NOT be removed by clean_all"
         );
+    }
+
+    // ---------------------------------------------------------------------------
+    // Interactive confirmation tests (clean_all_with_input)
+    // ---------------------------------------------------------------------------
+
+    /// Non-`yes` input cancels the operation and leaves state untouched.
+    #[test]
+    #[serial]
+    #[cfg(unix)]
+    fn test_clean_all_interactive_cancel_leaves_state_untouched() {
+        let temp = TempDir::new().unwrap();
+        let home = temp.path().join("home");
+
+        // Create fake ~/.skillshub/skills/tap/skill
+        let skillshub_home = home.join(".skillshub");
+        let skills_dir = skillshub_home.join("skills");
+        let skill_dir = skills_dir.join("tap").join("skill");
+        fs::create_dir_all(&skill_dir).unwrap();
+
+        // Create a minimal db.json
+        fs::write(
+            skillshub_home.join("db.json"),
+            r#"{"taps":{},"installed":{},"linked_agents":[],"external_skills":{}}"#,
+        )
+        .unwrap();
+
+        // Create fake ~/.claude/skills with a managed symlink
+        let claude_skills = home.join(".claude").join("skills");
+        fs::create_dir_all(&claude_skills).unwrap();
+        let link_path = claude_skills.join("skill");
+        std::os::unix::fs::symlink(&skill_dir, &link_path).unwrap();
+
+        let prev = set_test_home(&home);
+        // Simulate typing "no" at the prompt
+        let mut input = io::Cursor::new(b"no\n" as &[u8]);
+        let result = clean_all_with_input(false, &mut input);
+        restore_test_home(prev);
+
+        assert!(result.is_ok());
+
+        // Everything should still be present
+        assert!(skillshub_home.exists(), "skillshub home should still exist");
+        assert!(link_path.is_symlink(), "managed symlink should still exist");
+    }
+
+    /// Typing `yes` at the interactive prompt proceeds with deletion.
+    #[test]
+    #[serial]
+    #[cfg(unix)]
+    fn test_clean_all_interactive_confirm_removes_state() {
+        let temp = TempDir::new().unwrap();
+        let home = temp.path().join("home");
+
+        // Create fake ~/.skillshub/skills/tap/skill
+        let skillshub_home = home.join(".skillshub");
+        let skills_dir = skillshub_home.join("skills");
+        let skill_dir = skills_dir.join("tap").join("skill");
+        fs::create_dir_all(&skill_dir).unwrap();
+
+        // Create a minimal db.json
+        fs::write(
+            skillshub_home.join("db.json"),
+            r#"{"taps":{},"installed":{},"linked_agents":[],"external_skills":{}}"#,
+        )
+        .unwrap();
+
+        // Create fake ~/.claude/skills with a managed symlink
+        let claude_skills = home.join(".claude").join("skills");
+        fs::create_dir_all(&claude_skills).unwrap();
+        let link_path = claude_skills.join("skill");
+        std::os::unix::fs::symlink(&skill_dir, &link_path).unwrap();
+
+        let prev = set_test_home(&home);
+        // Simulate typing "yes" at the prompt
+        let mut input = io::Cursor::new(b"yes\n" as &[u8]);
+        let result = clean_all_with_input(false, &mut input);
+        restore_test_home(prev);
+
+        assert!(result.is_ok());
+
+        // Managed symlink should be gone
+        assert!(
+            !link_path.exists() && !link_path.is_symlink(),
+            "managed symlink should be removed"
+        );
+
+        // Skillshub home should be deleted
+        assert!(!skillshub_home.exists(), "skillshub home should be deleted");
     }
 
     // ---------------------------------------------------------------------------
