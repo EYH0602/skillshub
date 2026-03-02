@@ -302,18 +302,25 @@ mod tests {
     // Helpers
     // ---------------------------------------------------------------------------
 
-    /// Set SKILLSHUB_TEST_HOME to `home` and return the previous value so the
-    /// caller can restore it.
-    fn set_test_home(home: &std::path::Path) -> Option<String> {
-        let prev = std::env::var("SKILLSHUB_TEST_HOME").ok();
-        std::env::set_var("SKILLSHUB_TEST_HOME", home);
-        prev
+    /// RAII guard that restores `SKILLSHUB_TEST_HOME` on drop, even if the test
+    /// panics between `set_test_home` and cleanup.
+    struct TestHomeGuard(Option<String>);
+
+    impl TestHomeGuard {
+        /// Set `SKILLSHUB_TEST_HOME` to `home` and capture the previous value.
+        fn set(home: &std::path::Path) -> Self {
+            let prev = std::env::var("SKILLSHUB_TEST_HOME").ok();
+            std::env::set_var("SKILLSHUB_TEST_HOME", home);
+            Self(prev)
+        }
     }
 
-    fn restore_test_home(prev: Option<String>) {
-        match prev {
-            Some(v) => std::env::set_var("SKILLSHUB_TEST_HOME", v),
-            None => std::env::remove_var("SKILLSHUB_TEST_HOME"),
+    impl Drop for TestHomeGuard {
+        fn drop(&mut self) {
+            match self.0.take() {
+                Some(v) => std::env::set_var("SKILLSHUB_TEST_HOME", v),
+                None => std::env::remove_var("SKILLSHUB_TEST_HOME"),
+            }
         }
     }
 
@@ -339,7 +346,7 @@ mod tests {
         // Create a minimal db.json so init_db() doesn't fail
         fs::write(
             skillshub_home.join("db.json"),
-            r#"{"taps":{},"installed":{},"linked_agents":[],"external_skills":{}}"#,
+            r#"{"taps":{},"installed":{},"linked_agents":[],"external":{}}"#,
         )
         .unwrap();
 
@@ -350,9 +357,8 @@ mod tests {
         std::os::unix::fs::symlink(&skill_dir, &link_path).unwrap();
         assert!(link_path.is_symlink());
 
-        let prev = set_test_home(&home);
+        let _guard = TestHomeGuard::set(&home);
         let result = clean_all(true);
-        restore_test_home(prev);
 
         assert!(result.is_ok(), "clean_all returned error: {:?}", result);
 
@@ -377,9 +383,8 @@ mod tests {
         // Do NOT create ~/.skillshub at all; only create the home directory itself
         fs::create_dir_all(&home).unwrap();
 
-        let prev = set_test_home(&home);
+        let _guard = TestHomeGuard::set(&home);
         let result = clean_all(true);
-        restore_test_home(prev);
 
         assert!(
             result.is_ok(),
@@ -404,7 +409,7 @@ mod tests {
         // Create a minimal db.json
         fs::write(
             skillshub_home.join("db.json"),
-            r#"{"taps":{},"installed":{},"linked_agents":[],"external_skills":{}}"#,
+            r#"{"taps":{},"installed":{},"linked_agents":[],"external":{}}"#,
         )
         .unwrap();
 
@@ -419,9 +424,8 @@ mod tests {
         std::os::unix::fs::symlink(&external_skill, &link_path).unwrap();
         assert!(link_path.is_symlink());
 
-        let prev = set_test_home(&home);
+        let _guard = TestHomeGuard::set(&home);
         let result = clean_all(true);
-        restore_test_home(prev);
 
         assert!(result.is_ok(), "clean_all returned error: {:?}", result);
 
@@ -453,7 +457,7 @@ mod tests {
         // Create a minimal db.json
         fs::write(
             skillshub_home.join("db.json"),
-            r#"{"taps":{},"installed":{},"linked_agents":[],"external_skills":{}}"#,
+            r#"{"taps":{},"installed":{},"linked_agents":[],"external":{}}"#,
         )
         .unwrap();
 
@@ -463,11 +467,10 @@ mod tests {
         let link_path = claude_skills.join("skill");
         std::os::unix::fs::symlink(&skill_dir, &link_path).unwrap();
 
-        let prev = set_test_home(&home);
+        let _guard = TestHomeGuard::set(&home);
         // Simulate typing "no" at the prompt
         let mut input = io::Cursor::new(b"no\n" as &[u8]);
         let result = clean_all_with_input(false, &mut input);
-        restore_test_home(prev);
 
         assert!(result.is_ok());
 
@@ -493,7 +496,7 @@ mod tests {
         // Create a minimal db.json
         fs::write(
             skillshub_home.join("db.json"),
-            r#"{"taps":{},"installed":{},"linked_agents":[],"external_skills":{}}"#,
+            r#"{"taps":{},"installed":{},"linked_agents":[],"external":{}}"#,
         )
         .unwrap();
 
@@ -503,11 +506,10 @@ mod tests {
         let link_path = claude_skills.join("skill");
         std::os::unix::fs::symlink(&skill_dir, &link_path).unwrap();
 
-        let prev = set_test_home(&home);
+        let _guard = TestHomeGuard::set(&home);
         // Simulate typing "yes" at the prompt
         let mut input = io::Cursor::new(b"yes\n" as &[u8]);
         let result = clean_all_with_input(false, &mut input);
-        restore_test_home(prev);
 
         assert!(result.is_ok());
 
