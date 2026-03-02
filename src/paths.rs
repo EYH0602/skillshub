@@ -85,8 +85,10 @@ pub fn display_path_with_tilde(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     #[test]
+    #[serial]
     fn test_get_home_dir_uses_env_override() {
         // Save original value
         let original = std::env::var("SKILLSHUB_TEST_HOME").ok();
@@ -104,12 +106,14 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_get_skillshub_home() {
         let home = get_skillshub_home().unwrap();
         assert!(home.ends_with(".skillshub"));
     }
 
     #[test]
+    #[serial]
     fn test_get_skills_install_dir() {
         let dir = get_skills_install_dir().unwrap();
         assert!(dir.ends_with("skills"));
@@ -117,6 +121,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_display_path_with_tilde_home_path() {
         if let Some(home) = dirs::home_dir() {
             let test_path = home.join("some/nested/path");
@@ -126,6 +131,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_display_path_with_tilde_non_home_path() {
         let test_path = PathBuf::from("/usr/local/bin");
         let display = display_path_with_tilde(&test_path);

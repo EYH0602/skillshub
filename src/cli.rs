@@ -146,4 +146,11 @@ pub enum CleanCommands {
         #[arg(long)]
         remove_skills: bool,
     },
+
+    /// Completely remove all skillshub-managed state (full uninstall/purge)
+    All {
+        /// Skip interactive confirmation prompt (useful for scripts/CI)
+        #[arg(long)]
+        confirm: bool,
+    },
 }
