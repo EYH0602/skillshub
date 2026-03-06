@@ -7,7 +7,10 @@ use tabled::{
 };
 
 use super::db::{self, DEFAULT_TAP_NAME};
-use super::github::{copy_dir_contents, download_skill, get_default_branch, get_latest_commit, parse_github_url};
+use super::github::{
+    copy_dir_contents, discover_skills_from_gist, download_skill, fetch_gist, get_default_branch, get_latest_commit,
+    is_gist_url, parse_gist_url, parse_github_url,
+};
 use super::models::{InstalledSkill, SkillId};
 use super::tap::get_tap_registry;
 use crate::commands::link_to_agents;
@@ -132,6 +135,7 @@ fn install_skill_internal(full_name: &str) -> Result<bool> {
         installed_at: Utc::now(),
         source_url: Some(tap.url.clone()),
         source_path: Some(skill_entry.path.clone()),
+        gist_updated_at: None,
     };
 
     db::add_installed_skill(&mut db, &skill_id.full_name(), installed);
@@ -151,6 +155,11 @@ fn install_skill_internal(full_name: &str) -> Result<bool> {
 ///
 /// URL format: https://github.com/owner/repo/tree/commit/path/to/skill
 pub fn add_skill_from_url(url: &str) -> Result<()> {
+    // Check if this is a gist URL — handle separately
+    if is_gist_url(url) {
+        return add_skill_from_gist(url);
+    }
+
     let github_url = parse_github_url(url)?;
 
     // Must have a path to the skill folder
@@ -223,6 +232,7 @@ pub fn add_skill_from_url(url: &str) -> Result<()> {
         installed_at: Utc::now(),
         source_url: Some(url.to_string()),
         source_path: Some(skill_path.clone()),
+        gist_updated_at: None,
     };
 
     db::add_installed_skill(&mut db, &full_name, installed);
@@ -238,6 +248,86 @@ pub fn add_skill_from_url(url: &str) -> Result<()> {
 
     // Auto-link to all agents
     link_to_agents()?;
+
+    Ok(())
+}
+
+/// Add skill(s) from a GitHub Gist URL
+///
+/// Fetches the gist, discovers skills, and installs each one under `owner/gists/skill-name`.
+pub fn add_skill_from_gist(url: &str) -> Result<()> {
+    let (owner, gist_id) = parse_gist_url(url).with_context(|| format!("Invalid gist URL: {}", url))?;
+
+    println!("{} Fetching gist from {}", "=>".green().bold(), url);
+
+    let gist = fetch_gist(&gist_id)?;
+
+    let skills = discover_skills_from_gist(&gist);
+    if skills.is_empty() {
+        anyhow::bail!(
+            "No valid skills found in gist.\n\
+             A gist skill needs a file named SKILL.md, or files with valid SKILL.md frontmatter \
+             (requires 'name' and 'description' fields)."
+        );
+    }
+
+    let mut db = db::init_db()?;
+    let install_dir = get_skills_install_dir()?;
+    let tap_name = format!("{}/gists", owner);
+
+    // Create synthetic tap if needed
+    if db::get_tap(&db, &tap_name).is_none() {
+        let tap_info = super::models::TapInfo {
+            url: format!("https://gist.github.com/{}", owner),
+            skills_path: String::new(),
+            updated_at: Some(Utc::now()),
+            is_default: false,
+            cached_registry: None,
+        };
+        db::add_tap(&mut db, &tap_name, tap_info);
+    }
+
+    let mut installed_count = 0;
+
+    for (skill_name, content) in &skills {
+        let full_name = format!("{}/{}", tap_name, skill_name);
+
+        // Check if already installed
+        if db::is_skill_installed(&db, &full_name) {
+            println!(
+                "{} Skill '{}' is already installed. Use '{}' to update.",
+                "Info:".cyan(),
+                full_name,
+                format!("skillshub update {}", full_name).bold()
+            );
+            continue;
+        }
+
+        let dest = install_dir.join(&tap_name).join(skill_name);
+        std::fs::create_dir_all(&dest)?;
+        std::fs::write(dest.join("SKILL.md"), content)?;
+
+        let installed = InstalledSkill {
+            tap: tap_name.clone(),
+            skill: skill_name.clone(),
+            commit: None,
+            installed_at: Utc::now(),
+            source_url: Some(url.to_string()),
+            source_path: Some(gist_id.clone()),
+            gist_updated_at: Some(gist.updated_at.clone()),
+        };
+
+        db::add_installed_skill(&mut db, &full_name, installed);
+        installed_count += 1;
+
+        println!("{} Added '{}' from gist to {}", "✓".green(), full_name, dest.display());
+    }
+
+    db::save_db(&db)?;
+
+    if installed_count > 0 {
+        link_to_agents()?;
+    }
 
     Ok(())
 }
@@ -353,6 +443,48 @@ pub fn update_skill(full_name: Option<&str>) -> Result<()> {
 
     for skill_name in skills_to_update {
         let installed = db.installed.get(&skill_name).unwrap().clone();
+
+        // Handle gist-sourced skills separately
+        if installed.gist_updated_at.is_some() {
+            if let Some(gist_id) = &installed.source_path {
+                match fetch_gist(gist_id) {
+                    Ok(gist) => {
+                        if Some(&gist.updated_at) == installed.gist_updated_at.as_ref() {
+                            println!("  {} {} (up to date)", "✓".green(), skill_name);
+                            continue;
+                        }
+
+                        // Re-discover and update
+                        let skills_found = discover_skills_from_gist(&gist);
+                        let skill_content = skills_found.iter().find(|(name, _)| *name == installed.skill);
+
+                        match skill_content {
+                            Some((_, content)) => {
+                                let install_dir = get_skills_install_dir()?;
+                                let dest = install_dir.join(&installed.tap).join(&installed.skill);
+                                std::fs::create_dir_all(&dest)?;
+                                std::fs::write(dest.join("SKILL.md"), content)?;
+
+                                if let Some(skill) = db.installed.get_mut(&skill_name) {
+                                    skill.gist_updated_at = Some(gist.updated_at.clone());
+                                    skill.installed_at = Utc::now();
+                                }
+
+                                println!("  {} {} (gist updated)", "✓".green(), skill_name,);
+                                updated_count += 1;
+                            }
+                            None => {
+                                println!("  {} {} (skill no longer found in gist)", "✗".red(), skill_name);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        println!("  {} {} ({})", "✗".red(), skill_name, e);
+                    }
+                }
+                continue;
+            }
+        }
 
         let tap = match db::get_tap(&db, &installed.tap) {
             Some(t) => t.clone(),
@@ -815,6 +947,15 @@ pub fn install_all_from_tap(tap_name: &str) -> Result<()> {
 
 /// Internal helper to install all skills from a tap (used by both install_all and install_all_from_tap)
 fn install_all_from_tap_internal(db: &super::models::Database, tap_name: &str) -> Result<usize> {
+    // Skip gist taps — their skills are installed at add-time and have no registry
+    if let Some(tap) = db::get_tap(db, tap_name) {
+        if tap.url.contains("gist.github.com") {
+            let count = db::get_skills_from_tap(db, tap_name).len();
+            println!("  {} {} ({} skills, gist — skipped)", "○".yellow(), tap_name, count);
+            return Ok(0);
+        }
+    }
+
     let registry = get_tap_registry(db, tap_name)
         .with_context(|| format!("Failed to get registry for tap '{}'", tap_name))?
         .with_context(|| {
@@ -892,6 +1033,38 @@ mod tests {
         assert!(dst.path().join("subdir/nested.txt").exists());
         assert_eq!(fs::read(dst.path().join("file.txt")).unwrap(), b"hello");
         assert_eq!(fs::read(dst.path().join("subdir/nested.txt")).unwrap(), b"world");
+    }
+
+    #[test]
+    fn test_install_all_from_tap_internal_skips_gist_taps() {
+        use super::super::models::{Database, TapInfo};
+        use std::collections::HashMap;
+
+        let mut taps = HashMap::new();
+        taps.insert(
+            "garrytan/gists".to_string(),
+            TapInfo {
+                url: "https://gist.github.com/garrytan".to_string(),
+                skills_path: String::new(),
+                updated_at: None,
+                is_default: false,
+                cached_registry: None,
+            },
+        );
+
+        let db = Database {
+            taps,
+            ..Default::default()
+        };
+
+        // Should return Ok(0) instead of erroring about missing registry
+        let result = install_all_from_tap_internal(&db, "garrytan/gists");
+        assert!(
+            result.is_ok(),
+            "gist taps should be skipped, not error: {:?}",
+            result.err()
+        );
+        assert_eq!(result.unwrap(), 0);
     }
 
     #[test]

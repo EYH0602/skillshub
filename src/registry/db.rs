@@ -249,6 +249,7 @@ mod tests {
                 installed_at: Utc::now(),
                 source_url: None,
                 source_path: None,
+                gist_updated_at: None,
             },
         );
 
@@ -266,6 +267,7 @@ mod tests {
             installed_at: Utc::now(),
             source_url: None,
             source_path: None,
+            gist_updated_at: None,
         };
 
         add_installed_skill(&mut db, "tap/skill", skill);
@@ -307,6 +309,7 @@ mod tests {
             installed_at: Utc::now(),
             source_url: None,
             source_path: None,
+            gist_updated_at: None,
         };
         let skill2 = InstalledSkill {
             tap: "tap1".to_string(),
@@ -315,6 +318,7 @@ mod tests {
             installed_at: Utc::now(),
             source_url: None,
             source_path: None,
+            gist_updated_at: None,
         };
         let skill3 = InstalledSkill {
             tap: "tap2".to_string(),
@@ -323,6 +327,7 @@ mod tests {
             installed_at: Utc::now(),
             source_url: None,
             source_path: None,
+            gist_updated_at: None,
         };
 
         add_installed_skill(&mut db, "tap1/skill1", skill1);

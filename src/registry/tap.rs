@@ -186,6 +186,13 @@ pub fn update_tap(name: Option<&str>) -> Result<()> {
     for tap_name in taps_to_update {
         let tap = db.taps.get(&tap_name).unwrap().clone();
 
+        // Skip synthetic gist taps — they have no backing repository to update from
+        if tap.url.contains("gist.github.com") {
+            let count = count_installed_skills(&db, &tap_name);
+            println!("  {} {} ({} skills, gist)", "✓".green(), tap_name, count);
+            continue;
+        }
+
         print!("  {} Updating {}...", "○".yellow(), tap_name);
 
         match update_single_tap(&mut db, &tap_name, &tap) {
@@ -414,6 +421,7 @@ mod tests {
                 installed_at: Utc::now(),
                 source_url: None,
                 source_path: None,
+                gist_updated_at: None,
             },
         );
         db.installed.insert(
@@ -425,6 +433,7 @@ mod tests {
                 installed_at: Utc::now(),
                 source_url: None,
                 source_path: None,
+                gist_updated_at: None,
             },
         );
         db.installed.insert(
@@ -436,6 +445,7 @@ mod tests {
                 installed_at: Utc::now(),
                 source_url: None,
                 source_path: None,
+                gist_updated_at: None,
             },
         );
 

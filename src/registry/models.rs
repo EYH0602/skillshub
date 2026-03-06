@@ -69,6 +69,10 @@ pub struct InstalledSkill {
     /// Path within the repository where this skill lives
     #[serde(default)]
     pub source_path: Option<String>,
+
+    /// Gist updated_at timestamp for tracking gist skill freshness (None for non-gist skills)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gist_updated_at: Option<String>,
 }
 
 /// Information about an externally-managed skill (not installed via skillshub)
@@ -303,6 +307,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_github_url_methods() {
         let url = GitHubUrl {
             owner: "user".to_string(),
@@ -452,5 +457,36 @@ mod tests {
         assert_eq!(cached.skills.len(), 2);
         assert!(cached.skills.contains_key("skill1"));
         assert!(cached.skills.contains_key("skill2"));
+    }
+
+    #[test]
+    fn test_installed_skill_gist_updated_at_field() {
+        let skill = InstalledSkill {
+            tap: "garrytan/gists".to_string(),
+            skill: "plan-exit-review".to_string(),
+            commit: None,
+            installed_at: chrono::Utc::now(),
+            source_url: Some("https://gist.github.com/garrytan/001f9074cab1a8f545ebecbc73a813df".to_string()),
+            source_path: None,
+            gist_updated_at: Some("2025-01-15T10:30:00Z".to_string()),
+        };
+
+        let json = serde_json::to_string(&skill).unwrap();
+        let restored: InstalledSkill = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.gist_updated_at, Some("2025-01-15T10:30:00Z".to_string()));
+    }
+
+    #[test]
+    fn test_installed_skill_without_gist_updated_at_deserializes() {
+        let json = r#"{
+            "tap": "owner/repo",
+            "skill": "my-skill",
+            "commit": "abc1234",
+            "installed_at": "2025-01-01T00:00:00Z",
+            "source_url": null,
+            "source_path": null
+        }"#;
+        let skill: InstalledSkill = serde_json::from_str(json).unwrap();
+        assert!(skill.gist_updated_at.is_none());
     }
 }

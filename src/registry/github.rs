@@ -301,6 +301,31 @@ struct RepoInfo {
     default_branch: String,
 }
 
+/// GitHub Gist API response
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct GistResponse {
+    pub id: String,
+    pub owner: GistOwner,
+    pub updated_at: String,
+    pub files: HashMap<String, GistFile>,
+}
+
+/// Gist owner info
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct GistOwner {
+    pub login: String,
+}
+
+/// A file within a gist
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct GistFile {
+    pub filename: String,
+    pub content: Option<String>,
+}
+
 /// Get the default branch for a repository from GitHub API
 pub fn get_default_branch(owner: &str, repo: &str) -> Result<String> {
     let client = build_client()?;
@@ -686,6 +711,113 @@ pub(crate) fn copy_dir_contents(src: &Path, dst: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Check if a URL points to a GitHub Gist
+pub fn is_gist_url(url: &str) -> bool {
+    let url = url.trim_end_matches('/');
+    url.starts_with("https://gist.github.com/")
+        || url.starts_with("http://gist.github.com/")
+        || url.starts_with("gist.github.com/")
+}
+
+/// Parse a GitHub Gist URL into (owner, gist_id)
+///
+/// Supports formats:
+/// - https://gist.github.com/owner/gist_id
+/// - http://gist.github.com/owner/gist_id
+/// - gist.github.com/owner/gist_id
+/// - URLs with trailing slash or revision suffix
+///
+/// Returns None if the URL is not a gist URL.
+pub fn parse_gist_url(url: &str) -> Option<(String, String)> {
+    let url = url.trim_end_matches('/');
+
+    let path = url
+        .strip_prefix("https://gist.github.com/")
+        .or_else(|| url.strip_prefix("http://gist.github.com/"))
+        .or_else(|| url.strip_prefix("gist.github.com/"))?;
+
+    let parts: Vec<&str> = path.split('/').collect();
+    if parts.len() < 2 || parts[0].is_empty() || parts[1].is_empty() {
+        return None;
+    }
+
+    Some((parts[0].to_string(), parts[1].to_string()))
+}
+
+/// Fetch a gist from the GitHub API
+///
+/// Returns the parsed gist response including all file contents.
+pub fn fetch_gist(gist_id: &str) -> Result<GistResponse> {
+    let client = build_client()?;
+    let api_base = std::env::var("SKILLSHUB_GITHUB_API_BASE").unwrap_or_else(|_| "https://api.github.com".to_string());
+    let url = format!("{}/gists/{}", api_base, gist_id);
+
+    let response = send_with_retry(|| with_auth(client.get(&url)), &url)?;
+
+    let status = response.status();
+    if !status.is_success() {
+        if status == reqwest::StatusCode::NOT_FOUND {
+            anyhow::bail!(
+                "Gist not found: {}\n\
+                 Please check that the gist ID is correct and the gist is public \
+                 (or GITHUB_TOKEN is set for secret gists)",
+                gist_id
+            );
+        }
+        anyhow::bail!("Failed to fetch gist: HTTP {}", status);
+    }
+
+    let gist: GistResponse = response.json().with_context(|| "Failed to parse gist API response")?;
+
+    Ok(gist)
+}
+
+/// Check whether a skill name is safe to use in filesystem paths.
+///
+/// Rejects names containing path traversal sequences (`..`, `/`, `\`) or
+/// names that are empty / consist only of dots, which could escape the
+/// intended install directory.
+fn is_safe_skill_name(name: &str) -> bool {
+    !name.is_empty() && !name.contains('/') && !name.contains('\\') && !name.contains("..") && name != "."
+}
+
+/// Discover skills from a fetched gist.
+///
+/// Returns a list of (skill_name, file_content) tuples.
+///
+/// Discovery logic:
+/// 1. If any file is named "SKILL.md", use only that file (single skill).
+/// 2. Otherwise, scan all files for valid SKILL.md frontmatter (requires `name` + `description`).
+///
+/// Skill names are validated to prevent path traversal; names containing
+/// `..`, `/`, or `\` are silently skipped.
+pub fn discover_skills_from_gist(gist: &GistResponse) -> Vec<(String, String)> {
+    // Level 1: Check for a file literally named "SKILL.md"
+    if let Some(skill_md) = gist.files.get("SKILL.md") {
+        if let Some(content) = &skill_md.content {
+            if let Some((name, _desc)) = parse_skill_md_content(content) {
+                if is_safe_skill_name(&name) {
+                    return vec![(name, content.clone())];
+                }
+            }
+        }
+    }
+
+    // Level 2: Scan all files for valid skill frontmatter (requires name + description)
+    let mut skills = Vec::new();
+    for file in gist.files.values() {
+        if let Some(content) = &file.content {
+            if let Some((name, desc)) = parse_skill_md_content(content) {
+                if desc.is_some() && is_safe_skill_name(&name) {
+                    skills.push((name, content.clone()));
+                }
+            }
+        }
+    }
+
+    skills
 }
 
 /// Parse a GitHub star list URL into (username, list_name)
@@ -1472,6 +1604,314 @@ name: minimal-skill
         assert!(parse_star_list_url("https://github.com/stars/user/lists/name/extra").is_err());
     }
 
+    // --- Gist URL parsing tests ---
+
+    #[test]
+    fn test_parse_gist_url_full() {
+        let result = parse_gist_url("https://gist.github.com/garrytan/001f9074cab1a8f545ebecbc73a813df");
+        assert!(result.is_some());
+        let (owner, gist_id) = result.unwrap();
+        assert_eq!(owner, "garrytan");
+        assert_eq!(gist_id, "001f9074cab1a8f545ebecbc73a813df");
+    }
+
+    #[test]
+    fn test_parse_gist_url_http() {
+        let result = parse_gist_url("http://gist.github.com/user/abc123def456");
+        assert!(result.is_some());
+        let (owner, gist_id) = result.unwrap();
+        assert_eq!(owner, "user");
+        assert_eq!(gist_id, "abc123def456");
+    }
+
+    #[test]
+    fn test_parse_gist_url_no_protocol() {
+        let result = parse_gist_url("gist.github.com/user/abc123");
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_parse_gist_url_not_a_gist() {
+        assert!(parse_gist_url("https://github.com/user/repo").is_none());
+        assert!(parse_gist_url("https://example.com/user/abc").is_none());
+        assert!(parse_gist_url("user/repo").is_none());
+    }
+
+    #[test]
+    fn test_parse_gist_url_trailing_slash() {
+        let result = parse_gist_url("https://gist.github.com/garrytan/abc123/");
+        assert!(result.is_some());
+        let (owner, gist_id) = result.unwrap();
+        assert_eq!(owner, "garrytan");
+        assert_eq!(gist_id, "abc123");
+    }
+
+    #[test]
+    fn test_parse_gist_url_with_revision() {
+        let result = parse_gist_url("https://gist.github.com/garrytan/abc123/def456");
+        assert!(result.is_some());
+        let (owner, gist_id) = result.unwrap();
+        assert_eq!(owner, "garrytan");
+        assert_eq!(gist_id, "abc123");
+    }
+
+    #[test]
+    fn test_is_gist_url() {
+        assert!(is_gist_url("https://gist.github.com/user/abc123"));
+        assert!(is_gist_url("http://gist.github.com/user/abc123"));
+        assert!(is_gist_url("gist.github.com/user/abc123"));
+        assert!(!is_gist_url("https://github.com/user/repo"));
+        assert!(!is_gist_url("user/repo"));
+    }
+
+    // --- Gist API deserialization tests ---
+
+    #[test]
+    fn test_gist_response_deserialize() {
+        let json = r#"{
+            "id": "abc123",
+            "owner": { "login": "garrytan" },
+            "updated_at": "2025-01-15T10:30:00Z",
+            "files": {
+                "SKILL.md": {
+                    "filename": "SKILL.md",
+                    "content": "---\nname: my-skill\ndescription: A skill\n---\n# My Skill"
+                }
+            }
+        }"#;
+
+        let gist: GistResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(gist.id, "abc123");
+        assert_eq!(gist.owner.login, "garrytan");
+        assert_eq!(gist.updated_at, "2025-01-15T10:30:00Z");
+        assert_eq!(gist.files.len(), 1);
+        assert!(gist.files.contains_key("SKILL.md"));
+    }
+
+    #[test]
+    fn test_gist_response_multiple_files() {
+        let json = r#"{
+            "id": "abc123",
+            "owner": { "login": "user" },
+            "updated_at": "2025-01-15T10:30:00Z",
+            "files": {
+                "Garry's plan-exit-review skill": {
+                    "filename": "Garry's plan-exit-review skill",
+                    "content": "---\nname: plan-exit-review\ndescription: Review plans\n---\n# Content"
+                },
+                "another-skill": {
+                    "filename": "another-skill",
+                    "content": "---\nname: another-skill\ndescription: Another skill\n---\n# Another"
+                }
+            }
+        }"#;
+
+        let gist: GistResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(gist.files.len(), 2);
+    }
+
+    // --- Gist skill discovery tests ---
+
+    #[test]
+    fn test_discover_skills_from_gist_with_skill_md() {
+        let mut files = HashMap::new();
+        files.insert(
+            "SKILL.md".to_string(),
+            GistFile {
+                filename: "SKILL.md".to_string(),
+                content: Some(
+                    "---\nname: my-skill\ndescription: A cool skill\n---\n# My Skill\nInstructions here.".to_string(),
+                ),
+            },
+        );
+        files.insert(
+            "notes.txt".to_string(),
+            GistFile {
+                filename: "notes.txt".to_string(),
+                content: Some("Some notes".to_string()),
+            },
+        );
+
+        let gist = GistResponse {
+            id: "abc123".to_string(),
+            owner: GistOwner {
+                login: "user".to_string(),
+            },
+            updated_at: "2025-01-15T10:30:00Z".to_string(),
+            files,
+        };
+
+        let skills = discover_skills_from_gist(&gist);
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].0, "my-skill");
+        assert!(skills[0].1.contains("# My Skill"));
+    }
+
+    #[test]
+    fn test_discover_skills_from_gist_multiple_valid_files() {
+        let mut files = HashMap::new();
+        files.insert(
+            "Garry's skill".to_string(),
+            GistFile {
+                filename: "Garry's skill".to_string(),
+                content: Some("---\nname: plan-exit-review\ndescription: Review plans\n---\n# Content".to_string()),
+            },
+        );
+        files.insert(
+            "another-skill".to_string(),
+            GistFile {
+                filename: "another-skill".to_string(),
+                content: Some("---\nname: code-helper\ndescription: Help with code\n---\n# Helper".to_string()),
+            },
+        );
+        files.insert(
+            "readme.txt".to_string(),
+            GistFile {
+                filename: "readme.txt".to_string(),
+                content: Some("This is not a skill file".to_string()),
+            },
+        );
+
+        let gist = GistResponse {
+            id: "abc123".to_string(),
+            owner: GistOwner {
+                login: "user".to_string(),
+            },
+            updated_at: "2025-01-15T10:30:00Z".to_string(),
+            files,
+        };
+
+        let skills = discover_skills_from_gist(&gist);
+        assert_eq!(skills.len(), 2);
+        let names: Vec<&str> = skills.iter().map(|s| s.0.as_str()).collect();
+        assert!(names.contains(&"plan-exit-review"));
+        assert!(names.contains(&"code-helper"));
+    }
+
+    #[test]
+    fn test_discover_skills_from_gist_no_valid_skills() {
+        let mut files = HashMap::new();
+        files.insert(
+            "notes.txt".to_string(),
+            GistFile {
+                filename: "notes.txt".to_string(),
+                content: Some("Just some notes".to_string()),
+            },
+        );
+
+        let gist = GistResponse {
+            id: "abc123".to_string(),
+            owner: GistOwner {
+                login: "user".to_string(),
+            },
+            updated_at: "2025-01-15T10:30:00Z".to_string(),
+            files,
+        };
+
+        let skills = discover_skills_from_gist(&gist);
+        assert!(skills.is_empty());
+    }
+
+    #[test]
+    fn test_discover_skills_from_gist_skill_md_takes_priority() {
+        let mut files = HashMap::new();
+        files.insert(
+            "SKILL.md".to_string(),
+            GistFile {
+                filename: "SKILL.md".to_string(),
+                content: Some("---\nname: main-skill\ndescription: The main one\n---\n# Main".to_string()),
+            },
+        );
+        files.insert(
+            "other".to_string(),
+            GistFile {
+                filename: "other".to_string(),
+                content: Some("---\nname: other-skill\ndescription: Should be ignored\n---\n# Other".to_string()),
+            },
+        );
+
+        let gist = GistResponse {
+            id: "abc123".to_string(),
+            owner: GistOwner {
+                login: "user".to_string(),
+            },
+            updated_at: "2025-01-15T10:30:00Z".to_string(),
+            files,
+        };
+
+        let skills = discover_skills_from_gist(&gist);
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].0, "main-skill");
+    }
+
+    #[test]
+    fn test_is_safe_skill_name_valid() {
+        assert!(is_safe_skill_name("my-skill"));
+        assert!(is_safe_skill_name("skill_v2"));
+        assert!(is_safe_skill_name("CamelCase"));
+        assert!(is_safe_skill_name("a"));
+    }
+
+    #[test]
+    fn test_is_safe_skill_name_rejects_path_traversal() {
+        assert!(!is_safe_skill_name("../../../etc/passwd"));
+        assert!(!is_safe_skill_name(".."));
+        assert!(!is_safe_skill_name("foo/bar"));
+        assert!(!is_safe_skill_name("foo\\bar"));
+        assert!(!is_safe_skill_name(""));
+        assert!(!is_safe_skill_name("."));
+        assert!(!is_safe_skill_name("a/.."));
+        assert!(!is_safe_skill_name("..hidden"));
+    }
+
+    #[test]
+    fn test_discover_skills_from_gist_rejects_path_traversal_name() {
+        let mut files = HashMap::new();
+        files.insert(
+            "SKILL.md".to_string(),
+            GistFile {
+                filename: "SKILL.md".to_string(),
+                content: Some("---\nname: ../../../etc/passwd\ndescription: Malicious\n---\n# Evil".to_string()),
+            },
+        );
+
+        let gist = GistResponse {
+            id: "evil".to_string(),
+            owner: GistOwner {
+                login: "attacker".to_string(),
+            },
+            updated_at: "2025-01-15T10:30:00Z".to_string(),
+            files,
+        };
+
+        let skills = discover_skills_from_gist(&gist);
+        assert!(skills.is_empty(), "Skills with path traversal names must be rejected");
+    }
+
+    #[test]
+    fn test_discover_skills_from_gist_rejects_slash_in_name() {
+        let mut files = HashMap::new();
+        files.insert(
+            "evil.md".to_string(),
+            GistFile {
+                filename: "evil.md".to_string(),
+                content: Some("---\nname: foo/bar\ndescription: Slash in name\n---\n# Evil".to_string()),
+            },
+        );
+
+        let gist = GistResponse {
+            id: "evil2".to_string(),
+            owner: GistOwner {
+                login: "attacker".to_string(),
+            },
+            updated_at: "2025-01-15T10:30:00Z".to_string(),
+            files,
+        };
+
+        let skills = discover_skills_from_gist(&gist);
+        assert!(skills.is_empty(), "Skills with slashes in names must be rejected");
+    }
+
     // --- Star list GraphQL integration tests ---
 
     #[test]
@@ -1595,5 +2035,127 @@ name: minimal-skill
             "error should mention list not found: {}",
             err_msg
         );
+    }
+
+    // --- Gist API integration tests (wiremock) ---
+
+    #[test]
+    #[serial]
+    fn test_fetch_gist_via_api() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let server = rt.block_on(wiremock::MockServer::start());
+
+        let gist_body = serde_json::json!({
+            "id": "abc123",
+            "owner": { "login": "testuser" },
+            "updated_at": "2025-06-01T12:00:00Z",
+            "files": {
+                "SKILL.md": {
+                    "filename": "SKILL.md",
+                    "content": "---\nname: test-skill\ndescription: A test skill\n---\n# Test Skill\nDo testing."
+                }
+            }
+        });
+
+        rt.block_on(async {
+            wiremock::Mock::given(wiremock::matchers::method("GET"))
+                .and(wiremock::matchers::path("/gists/abc123"))
+                .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(&gist_body))
+                .mount(&server)
+                .await;
+        });
+
+        std::env::set_var("SKILLSHUB_GITHUB_API_BASE", server.uri());
+
+        let gist = fetch_gist("abc123").unwrap();
+        assert_eq!(gist.id, "abc123");
+        assert_eq!(gist.owner.login, "testuser");
+        assert_eq!(gist.updated_at, "2025-06-01T12:00:00Z");
+        assert_eq!(gist.files.len(), 1);
+
+        let skills = discover_skills_from_gist(&gist);
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].0, "test-skill");
+
+        std::env::remove_var("SKILLSHUB_GITHUB_API_BASE");
+    }
+
+    #[test]
+    #[serial]
+    fn test_fetch_gist_not_found() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let server = rt.block_on(wiremock::MockServer::start());
+
+        rt.block_on(async {
+            wiremock::Mock::given(wiremock::matchers::method("GET"))
+                .and(wiremock::matchers::path("/gists/nonexistent"))
+                .respond_with(wiremock::ResponseTemplate::new(404))
+                .mount(&server)
+                .await;
+        });
+
+        std::env::set_var("SKILLSHUB_GITHUB_API_BASE", server.uri());
+
+        let result = fetch_gist("nonexistent");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Gist not found"));
+
+        std::env::remove_var("SKILLSHUB_GITHUB_API_BASE");
+    }
+
+    #[test]
+    #[serial]
+    fn test_fetch_gist_multi_skill() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let server = rt.block_on(wiremock::MockServer::start());
+
+        let gist_body = serde_json::json!({
+            "id": "multi123",
+            "owner": { "login": "multiuser" },
+            "updated_at": "2025-06-01T12:00:00Z",
+            "files": {
+                "Skill One": {
+                    "filename": "Skill One",
+                    "content": "---\nname: skill-one\ndescription: First skill\n---\n# Skill One"
+                },
+                "Skill Two": {
+                    "filename": "Skill Two",
+                    "content": "---\nname: skill-two\ndescription: Second skill\n---\n# Skill Two"
+                },
+                "readme.txt": {
+                    "filename": "readme.txt",
+                    "content": "Just a readme"
+                }
+            }
+        });
+
+        rt.block_on(async {
+            wiremock::Mock::given(wiremock::matchers::method("GET"))
+                .and(wiremock::matchers::path("/gists/multi123"))
+                .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(&gist_body))
+                .mount(&server)
+                .await;
+        });
+
+        std::env::set_var("SKILLSHUB_GITHUB_API_BASE", server.uri());
+
+        let gist = fetch_gist("multi123").unwrap();
+        let skills = discover_skills_from_gist(&gist);
+        assert_eq!(skills.len(), 2);
+
+        let names: Vec<&str> = skills.iter().map(|s| s.0.as_str()).collect();
+        assert!(names.contains(&"skill-one"));
+        assert!(names.contains(&"skill-two"));
+
+        std::env::remove_var("SKILLSHUB_GITHUB_API_BASE");
     }
 }

@@ -77,6 +77,7 @@ pub fn migrate_old_installations() -> Result<()> {
                 installed_at: Utc::now(),
                 source_url: None,
                 source_path: None,
+                gist_updated_at: None,
             };
             db::add_installed_skill(&mut db, &full_name, installed);
         }
