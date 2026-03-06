@@ -947,6 +947,15 @@ pub fn install_all_from_tap(tap_name: &str) -> Result<()> {
 
 /// Internal helper to install all skills from a tap (used by both install_all and install_all_from_tap)
 fn install_all_from_tap_internal(db: &super::models::Database, tap_name: &str) -> Result<usize> {
+    // Skip gist taps — their skills are installed at add-time and have no registry
+    if let Some(tap) = db::get_tap(db, tap_name) {
+        if tap.url.contains("gist.github.com") {
+            let count = db::get_skills_from_tap(db, tap_name).len();
+            println!("  {} {} ({} skills, gist — skipped)", "○".yellow(), tap_name, count);
+            return Ok(0);
+        }
+    }
+
     let registry = get_tap_registry(db, tap_name)
         .with_context(|| format!("Failed to get registry for tap '{}'", tap_name))?
         .with_context(|| {
@@ -1024,6 +1033,38 @@ mod tests {
         assert!(dst.path().join("subdir/nested.txt").exists());
         assert_eq!(fs::read(dst.path().join("file.txt")).unwrap(), b"hello");
         assert_eq!(fs::read(dst.path().join("subdir/nested.txt")).unwrap(), b"world");
+    }
+
+    #[test]
+    fn test_install_all_from_tap_internal_skips_gist_taps() {
+        use super::super::models::{Database, TapInfo};
+        use std::collections::HashMap;
+
+        let mut taps = HashMap::new();
+        taps.insert(
+            "garrytan/gists".to_string(),
+            TapInfo {
+                url: "https://gist.github.com/garrytan".to_string(),
+                skills_path: String::new(),
+                updated_at: None,
+                is_default: false,
+                cached_registry: None,
+            },
+        );
+
+        let db = Database {
+            taps,
+            ..Default::default()
+        };
+
+        // Should return Ok(0) instead of erroring about missing registry
+        let result = install_all_from_tap_internal(&db, "garrytan/gists");
+        assert!(
+            result.is_ok(),
+            "gist taps should be skipped, not error: {:?}",
+            result.err()
+        );
+        assert_eq!(result.unwrap(), 0);
     }
 
     #[test]
