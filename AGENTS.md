@@ -90,7 +90,10 @@ Each agent has its own skills subdirectory name:
 ### Adding Skills from URLs
 ```bash
 skillshub add <github-url>                  # Add skill directly from GitHub URL
-# Example: skillshub add https://github.com/user/repo/tree/commit/path/to/skill
+skillshub add <gist-url>                    # Add skill(s) from a GitHub Gist
+# Examples:
+# skillshub add https://github.com/user/repo/tree/commit/path/to/skill
+# skillshub add https://gist.github.com/user/gist_id
 ```
 
 ### Skill Management

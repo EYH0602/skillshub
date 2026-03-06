@@ -414,6 +414,7 @@ mod tests {
                 installed_at: Utc::now(),
                 source_url: None,
                 source_path: None,
+                gist_updated_at: None,
             },
         );
         db.installed.insert(
@@ -425,6 +426,7 @@ mod tests {
                 installed_at: Utc::now(),
                 source_url: None,
                 source_path: None,
+                gist_updated_at: None,
             },
         );
         db.installed.insert(
@@ -436,6 +438,7 @@ mod tests {
                 installed_at: Utc::now(),
                 source_url: None,
                 source_path: None,
+                gist_updated_at: None,
             },
         );
 

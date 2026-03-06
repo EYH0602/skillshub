@@ -60,9 +60,12 @@ skillshub add https://github.com/user/repo/tree/main/skills/my-skill
 
 # Add with a specific commit (permalink)
 skillshub add https://github.com/user/repo/tree/abc1234/skills/my-skill
+
+# Add a skill from a GitHub Gist
+skillshub add https://gist.github.com/user/gist_id
 ```
 
-The skill will be organized under the repository identifier (e.g., `owner/repo/my-skill`).
+Skills from repositories are organized as `owner/repo/skill-name`. Gist skills are organized as `owner/gists/skill-name`.
 
 ### Skill Management
 
