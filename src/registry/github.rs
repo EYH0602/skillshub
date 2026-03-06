@@ -774,6 +774,15 @@ pub fn fetch_gist(gist_id: &str) -> Result<GistResponse> {
     Ok(gist)
 }
 
+/// Check whether a skill name is safe to use in filesystem paths.
+///
+/// Rejects names containing path traversal sequences (`..`, `/`, `\`) or
+/// names that are empty / consist only of dots, which could escape the
+/// intended install directory.
+fn is_safe_skill_name(name: &str) -> bool {
+    !name.is_empty() && !name.contains('/') && !name.contains('\\') && !name.contains("..") && name != "."
+}
+
 /// Discover skills from a fetched gist.
 ///
 /// Returns a list of (skill_name, file_content) tuples.
@@ -781,12 +790,17 @@ pub fn fetch_gist(gist_id: &str) -> Result<GistResponse> {
 /// Discovery logic:
 /// 1. If any file is named "SKILL.md", use only that file (single skill).
 /// 2. Otherwise, scan all files for valid SKILL.md frontmatter (requires `name` + `description`).
+///
+/// Skill names are validated to prevent path traversal; names containing
+/// `..`, `/`, or `\` are silently skipped.
 pub fn discover_skills_from_gist(gist: &GistResponse) -> Vec<(String, String)> {
     // Level 1: Check for a file literally named "SKILL.md"
     if let Some(skill_md) = gist.files.get("SKILL.md") {
         if let Some(content) = &skill_md.content {
             if let Some((name, _desc)) = parse_skill_md_content(content) {
-                return vec![(name, content.clone())];
+                if is_safe_skill_name(&name) {
+                    return vec![(name, content.clone())];
+                }
             }
         }
     }
@@ -796,7 +810,7 @@ pub fn discover_skills_from_gist(gist: &GistResponse) -> Vec<(String, String)> {
     for file in gist.files.values() {
         if let Some(content) = &file.content {
             if let Some((name, desc)) = parse_skill_md_content(content) {
-                if desc.is_some() {
+                if desc.is_some() && is_safe_skill_name(&name) {
                     skills.push((name, content.clone()));
                 }
             }
@@ -1828,6 +1842,74 @@ name: minimal-skill
         let skills = discover_skills_from_gist(&gist);
         assert_eq!(skills.len(), 1);
         assert_eq!(skills[0].0, "main-skill");
+    }
+
+    #[test]
+    fn test_is_safe_skill_name_valid() {
+        assert!(is_safe_skill_name("my-skill"));
+        assert!(is_safe_skill_name("skill_v2"));
+        assert!(is_safe_skill_name("CamelCase"));
+        assert!(is_safe_skill_name("a"));
+    }
+
+    #[test]
+    fn test_is_safe_skill_name_rejects_path_traversal() {
+        assert!(!is_safe_skill_name("../../../etc/passwd"));
+        assert!(!is_safe_skill_name(".."));
+        assert!(!is_safe_skill_name("foo/bar"));
+        assert!(!is_safe_skill_name("foo\\bar"));
+        assert!(!is_safe_skill_name(""));
+        assert!(!is_safe_skill_name("."));
+        assert!(!is_safe_skill_name("a/.."));
+        assert!(!is_safe_skill_name("..hidden"));
+    }
+
+    #[test]
+    fn test_discover_skills_from_gist_rejects_path_traversal_name() {
+        let mut files = HashMap::new();
+        files.insert(
+            "SKILL.md".to_string(),
+            GistFile {
+                filename: "SKILL.md".to_string(),
+                content: Some("---\nname: ../../../etc/passwd\ndescription: Malicious\n---\n# Evil".to_string()),
+            },
+        );
+
+        let gist = GistResponse {
+            id: "evil".to_string(),
+            owner: GistOwner {
+                login: "attacker".to_string(),
+            },
+            updated_at: "2025-01-15T10:30:00Z".to_string(),
+            files,
+        };
+
+        let skills = discover_skills_from_gist(&gist);
+        assert!(skills.is_empty(), "Skills with path traversal names must be rejected");
+    }
+
+    #[test]
+    fn test_discover_skills_from_gist_rejects_slash_in_name() {
+        let mut files = HashMap::new();
+        files.insert(
+            "evil.md".to_string(),
+            GistFile {
+                filename: "evil.md".to_string(),
+                content: Some("---\nname: foo/bar\ndescription: Slash in name\n---\n# Evil".to_string()),
+            },
+        );
+
+        let gist = GistResponse {
+            id: "evil2".to_string(),
+            owner: GistOwner {
+                login: "attacker".to_string(),
+            },
+            updated_at: "2025-01-15T10:30:00Z".to_string(),
+            files,
+        };
+
+        let skills = discover_skills_from_gist(&gist);
+        assert!(skills.is_empty(), "Skills with slashes in names must be rejected");
     }
 
     // --- Star list GraphQL integration tests ---
