@@ -5,196 +5,16 @@
 Skillshub is a package manager for AI coding agent skills - like Homebrew for skills.
 It provides a CLI to install, manage, and link reusable skills to various coding agents.
 
-## Architecture
+For architecture, CLI reference, supported agents, and skill/tap formats, see `docs/`.
 
-```
-skillshub/
-├── src/
-│   ├── main.rs                 # CLI entry point
-│   ├── cli.rs                  # CLI command definitions (clap)
-│   ├── agent.rs                # Agent detection
-│   ├── skill.rs                # Skill discovery and parsing
-│   ├── paths.rs                # Path utilities
-│   ├── util.rs                 # General utilities
-│   ├── commands/               # Command implementations
-│   │   ├── mod.rs
-│   │   ├── agents.rs           # Show detected agents
-│   │   ├── clean.rs            # Clean cache and links
-│   │   ├── external.rs         # External skills management
-│   │   └── link.rs             # Link skills to agents
-│   └── registry/               # Tap-based registry system
-│       ├── mod.rs
-│       ├── models.rs           # Data structures
-│       ├── db.rs               # Database operations (~/.skillshub/db.json)
-│       ├── github.rs           # GitHub API integration
-│       ├── tap.rs              # Tap management
-│       ├── skill.rs            # Skill install/uninstall/update
-│       └── migration.rs        # Old installation migration
-├── skills/                     # Bundled skills (default tap)
-│   └── <skill-name>/
-│       ├── SKILL.md            # Skill metadata and instructions
-│       ├── scripts/            # Optional executable scripts
-│       └── references/         # Optional documentation
-├── Cargo.toml                  # Rust package config
-└── README.md                   # User documentation
-```
-
-## Key Concepts
-
-- **Taps**: Git repositories containing skills (like Homebrew taps). Skills are auto-discovered by scanning for `SKILL.md` files.
-- **Skills**: Reusable instruction sets for AI coding agents, defined in `SKILL.md` files
-- **Database**: `~/.skillshub/db.json` tracks installed skills, their versions, and external skills
-- **Installation**: Skills are downloaded/copied to `~/.skillshub/skills/<owner>/<repo>/<skill>/`
-- **Linking**: Per-skill symlinks are created from agent skill directories
-- **External Skills**: Skills installed through other means (marketplace, manual) are discovered and synced
-- **Agents**: Coding assistants like Claude, Codex, OpenCode, Aider, Cursor, Continue, Trae, Kimi, OpenClaw, ZeroClaw
-
-## Data Flow
-
-```
-GitHub Tap Repository          Local Database           Installed Skills
-┌─────────────────────┐       ┌──────────────┐        ┌─────────────────────┐
-│ any/path/           │──────▶│ db.json      │◀──────▶│ ~/.skillshub/       │
-│   SKILL.md          │       │ - taps       │        │   skills/           │
-│   (auto-discovered) │       │ - installed  │        │     owner/repo/skill│
-└─────────────────────┘       │ - external   │        └─────────────────────┘
-                              └──────────────┘
-                                     ▲
-                                     │ discovers
-                              ┌──────┴──────┐
-                              │ Agent dirs  │
-                              │ (external   │
-                              │  skills)    │
-                              └─────────────┘
-```
-
-## Supported Agents
-
-Each agent has its own skills subdirectory name:
-
-| Agent    | Directory      | Skills Path           |
-| -------- | -------------- | --------------------- |
-| Claude   | `~/.claude`    | `~/.claude/skills`    |
-| Codex    | `~/.codex`     | `~/.codex/skills`     |
-| OpenCode | `~/.opencode`  | `~/.opencode/skill`   |
-| Aider    | `~/.aider`     | `~/.aider/skills`     |
-| Cursor   | `~/.cursor`    | `~/.cursor/skills`    |
-| Continue | `~/.continue`  | `~/.continue/skills`  |
-| Trae     | `~/.trae`      | `~/.trae/skills`      |
-| Kimi     | `~/.kimi`      | `~/.kimi/skills`      |
-| OpenClaw | `~/.openclaw`  | `~/.openclaw/skills`  |
-| ZeroClaw | `~/.zeroclaw`  | `~/.zeroclaw/skills`  |
-
-## CLI Commands
-
-### Adding Skills from URLs
-```bash
-skillshub add <github-url>                  # Add skill directly from GitHub URL
-skillshub add <gist-url>                    # Add skill(s) from a GitHub Gist
-# Examples:
-# skillshub add https://github.com/user/repo/tree/commit/path/to/skill
-# skillshub add https://gist.github.com/user/gist_id
-```
-
-### Skill Management
-```bash
-skillshub list                              # List all available skills
-skillshub search <query>                    # Search skills across all taps
-skillshub install <owner/repo/skill>[@commit]  # Install a skill
-skillshub uninstall <owner/repo/skill>      # Remove installed skill
-skillshub update [owner/repo/skill]         # Update skill(s) to latest
-skillshub info <owner/repo/skill>           # Show skill details
-skillshub install-all                       # Install all from all added taps
-```
-
-### Star List Import
-```bash
-skillshub star-list <url>                   # Add all repos from a star list as taps
-skillshub star-list <url> --install         # Also install all skills from each tap
-# Example: skillshub star-list https://github.com/stars/EYH0602/lists/skills
-```
-
-Requires `GITHUB_TOKEN` (GraphQL API requires authentication).
-
-### Tap Management
-
-The default tap is `EYH0602/skillshub` (bundled). Add third-party taps like `anthropics/skills` or `vercel-labs/agent-skills`.
-
-```bash
-skillshub tap list                          # List configured taps
-# Skills column shows installed/available counts (e.g., 2/15 or 1/?)
-skillshub tap add <owner/repo>              # Add a tap (defaults to GitHub)
-skillshub tap add <github-url>              # Add a tap with full URL
-skillshub tap add <owner/repo> --install    # Add tap and install all skills
-skillshub tap remove <owner/repo>           # Remove a tap and uninstall its skills
-skillshub tap remove <owner/repo> --keep-skills  # Remove tap but keep skills installed
-skillshub tap update [owner/repo]           # Refresh tap registry
-skillshub tap install-all <owner/repo>      # Install all skills from a tap
-```
-
-### Agent Management
-```bash
-skillshub link                              # Link skills to detected agents
-skillshub agents                            # Show detected agents
-```
-
-### External Skills Management
-```bash
-skillshub external list                     # List discovered external skills
-skillshub external scan                     # Scan for external skills
-skillshub external forget <name>            # Stop tracking an external skill
-```
-
-External skills are skills found in agent directories that weren't installed via skillshub (e.g., from Claude marketplace or manual installation). They are automatically discovered from all agent directories during `skillshub link` and synced to all other agents.
-
-### Cleanup
-```bash
-skillshub clean cache                       # Clear cached registry data from taps
-skillshub clean links                       # Remove all skillshub-managed symlinks
-skillshub clean links --remove-skills       # Remove symlinks AND delete all installed skills
-skillshub clean all                         # Full uninstall: remove all skillshub state
-skillshub clean all --confirm               # Skip interactive confirmation prompt
-```
-
-The `clean cache` command clears cached tap registries, forcing a fresh fetch on next update. The `clean links` command removes all symlinks that skillshub created in agent directories. With `--remove-skills`, it also deletes all installed skills from `~/.skillshub/skills/`.
-
-The `clean all` command is a full uninstall/purge: it removes all managed symlinks from every detected agent directory, then deletes the entire `~/.skillshub/` directory (skills, database, and all other data). Without `--confirm`, it prints a summary and requires typing `yes` to proceed.
-
-### Migration
-```bash
-skillshub migrate                           # Migrate old-style installations
-```
-
-## Development Notes
+## Development
 
 - Rust 2021 edition
-- Uses `clap` for CLI parsing
-- Uses `tabled` for table output
-- Uses `colored` for terminal colors
-- Uses `serde` + `serde_json` for database
-- Uses `serde_yaml` for SKILL.md frontmatter parsing
-- Uses `reqwest` for HTTP requests (GitHub API)
-- Uses `flate2` + `tar` for tarball extraction
-- Uses `chrono` for timestamps
-
-### Developing
-
-- Before start working, refresh your knowledge from contents in `.agents` first.
 - Always update `README.md` and `CLAUDE.md` when you introduce new features or libraries.
-- Always write unit tests for integration testing and functional testing of new features.
-- Always test your code after your implementation.
-- Use `pre-commit install --install-hooks` (and optionally `--hook-type pre-push`) to enable local git hooks.
-- You should not commit anything and create pull request, let human do them. However, please suggest commit messages.
-
-#### Scratch Space
-
-Do not create ad-hoc files at repo root.
-1. Use `.agents/sandbox/` for throwaway exploration that will not be committed.
-2. Use `.agents/notes/` for longer-term notes that may be useful later.
-Always write down your plans and reasoning for future reference when encountering major tasks,
-like adding a feature.
-3. Use `.agents/accomplished/` for recording completed tasks and the summary of what we did,
-this may be useful for future reference.
+- Always write unit tests for new features.
+- Always test your code after implementation.
+- Use `pre-commit install --install-hooks` to enable local git hooks.
+- Do not commit or create pull requests — let the human do them. Suggest commit messages.
 
 ### Building
 
@@ -216,77 +36,17 @@ cargo run -- external list
 cargo run -- external scan
 ```
 
-## Skill Format
+### Planning
 
-Each skill has a `SKILL.md` with YAML frontmatter:
+Use `plans/` for planning out your work.
 
-```yaml
----
-name: skill-name
-description: What this skill does
-allowed-tools: Tool1, Tool2 # Optional, comma-separated or array
-license: MIT                # Optional, SPDX identifier
-metadata:                   # Optional nested block
-  author: my-org
-  version: "1.0"
----
-# Skill instructions in markdown...
-```
+- When adding a new feature, ALWAYS first create a plan in `plans/` and ask for review from the human developer before implementation.
+- Include the problem background, proposed solution, and implementation steps in your plan.
+- Commit the plan to the repo and ask for review before implementation.
+- After the plan is fully implemented, rewrite it as a design doc in `docs/`, and remove it from `plans/`.
 
-Required fields:
-- `name` - The skill identifier
+### Scratch Space
 
-Optional fields:
-- `description` - What this skill does and when to use it
-- `allowed-tools` - Comma-separated string or YAML array of allowed tool names
-- `license` - SPDX license identifier (e.g. `MIT`, `Apache-2.0`)
-- `metadata.author` - Author or organization name
-- `metadata.version` - Semantic version string (e.g. `"1.0"`)
-
-The `license`, `metadata.author`, and `metadata.version` fields are displayed by `skillshub info` when present.
-
-Optional subdirectories:
-
-- `scripts/` - Executable scripts the agent can run
-- `references/` or `resources/` - Documentation loaded into context
-
-## Tap Format
-
-Any GitHub repository can be a tap. Skills are automatically discovered by scanning for folders containing a `SKILL.md` file anywhere in the repository. No `registry.json` or special configuration is required.
-
-Example tap structure:
-```
-my-tap-repo/
-├── skills/
-│   ├── skill-a/
-│   │   └── SKILL.md
-│   └── skill-b/
-│       └── SKILL.md
-├── other/path/
-│   └── another-skill/
-│       └── SKILL.md
-└── README.md
-```
-
-All three skills above would be discovered when adding this repo as a tap.
-
-## Common Tasks
-
-### Adding a new skill to the default tap
-
-1. Create directory under `skills/<skill-name>/`
-2. Add `SKILL.md` with frontmatter and instructions
-3. Optionally add `scripts/` and `references/` subdirectories
-4. Test with `cargo run -- info EYH0602/skillshub/<skill-name>`
-
-### Adding a new agent
-
-1. Update `KNOWN_AGENTS` in `src/agent.rs`
-2. Specify the agent directory and skills subdirectory name
-
-### Creating a third-party tap
-
-1. Create a GitHub repository
-2. Add skill folders with `SKILL.md` files anywhere in the repo
-3. Users can add with: `skillshub tap add user/repo`
-4. Skills are automatically discovered by scanning for `SKILL.md` files
+Do not create ad-hoc files at repo root.
+- Use `.agents/sandbox/` for throwaway exploration that will not be committed.
+- Use `.agents/accomplished/` for recording completed tasks and summaries.
