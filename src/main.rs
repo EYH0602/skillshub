@@ -40,7 +40,7 @@ fn main() -> Result<()> {
         Commands::Agents => show_agents()?,
         Commands::Tap(tap_cmd) => match tap_cmd {
             TapCommands::Add { url, install } => add_tap(&url, install)?,
-            TapCommands::Remove { name } => remove_tap(&name)?,
+            TapCommands::Remove { name, keep_skills } => remove_tap(&name, keep_skills)?,
             TapCommands::List => list_taps()?,
             TapCommands::Update { name } => update_tap(name.as_deref())?,
             TapCommands::InstallAll { name } => install_all_from_tap(&name)?,

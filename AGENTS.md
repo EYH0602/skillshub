@@ -127,6 +127,7 @@ skillshub tap add <owner/repo>              # Add a tap (defaults to GitHub)
 skillshub tap add <github-url>              # Add a tap with full URL
 skillshub tap add <owner/repo> --install    # Add tap and install all skills
 skillshub tap remove <owner/repo>           # Remove a tap and uninstall its skills
+skillshub tap remove <owner/repo> --keep-skills  # Remove tap but keep skills installed
 skillshub tap update [owner/repo]           # Refresh tap registry
 skillshub tap install-all <owner/repo>      # Install all skills from a tap
 ```

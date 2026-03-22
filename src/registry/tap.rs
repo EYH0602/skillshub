@@ -89,8 +89,8 @@ pub fn add_tap(url: &str, install: bool) -> Result<()> {
     Ok(())
 }
 
-/// Remove a tap, uninstalling all its skills first
-pub fn remove_tap(name: &str) -> Result<()> {
+/// Remove a tap, optionally keeping its installed skills
+pub fn remove_tap(name: &str, keep_skills: bool) -> Result<()> {
     let mut db = db::init_db()?;
 
     // Check if tap exists
@@ -101,23 +101,35 @@ pub fn remove_tap(name: &str) -> Result<()> {
         anyhow::bail!("Cannot remove the default tap '{}'", name);
     }
 
-    // Uninstall all skills from this tap
+    // Handle installed skills from this tap
     let installed_from_tap = db::get_skills_from_tap(&db, name);
     if !installed_from_tap.is_empty() {
         let skill_names: Vec<String> = installed_from_tap.iter().map(|(n, _)| (*n).clone()).collect();
-        println!(
-            "{} Uninstalling {} skill(s) from tap '{}'",
-            "=>".green().bold(),
-            skill_names.len(),
-            name
-        );
 
-        for full_name in &skill_names {
-            super::skill::uninstall_skill(full_name)?;
+        if keep_skills {
+            println!(
+                "  {} {} skill(s) kept but can no longer be updated (tap removed):",
+                "!".yellow().bold(),
+                skill_names.len()
+            );
+            for full_name in &skill_names {
+                println!("      {}", full_name);
+            }
+        } else {
+            println!(
+                "{} Uninstalling {} skill(s) from tap '{}'",
+                "=>".green().bold(),
+                skill_names.len(),
+                name
+            );
+
+            for full_name in &skill_names {
+                super::skill::uninstall_skill(full_name)?;
+            }
+
+            // Re-init db since uninstall_skill saves after each removal
+            db = db::init_db()?;
         }
-
-        // Re-init db since uninstall_skill saves after each removal
-        db = db::init_db()?;
     }
 
     db::remove_tap(&mut db, name);
@@ -726,7 +738,7 @@ mod tests {
         fs::write(skillshub_home.join("db.json"), db_json.to_string()).unwrap();
 
         let _guard = TestHomeGuard::set(&home);
-        let result = remove_tap("test-user/test-repo");
+        let result = remove_tap("test-user/test-repo", false);
 
         assert!(result.is_ok(), "remove_tap failed: {:?}", result);
 
@@ -782,11 +794,76 @@ mod tests {
         fs::write(skillshub_home.join("db.json"), db_json.to_string()).unwrap();
 
         let _guard = TestHomeGuard::set(&home);
-        let result = remove_tap("empty-user/empty-repo");
+        let result = remove_tap("empty-user/empty-repo", false);
 
         assert!(result.is_ok(), "remove_tap failed: {:?}", result);
 
         let db = db::load_db().unwrap();
         assert!(db::get_tap(&db, "empty-user/empty-repo").is_none());
+    }
+
+    /// Removing a tap with --keep-skills should remove the tap but keep skills installed
+    #[test]
+    #[serial]
+    fn test_remove_tap_keep_skills() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        let home = temp.path().join("home");
+
+        let skillshub_home = home.join(".skillshub");
+        let skills_dir = skillshub_home.join("skills");
+        let skill_a_dir = skills_dir.join("test-user/test-repo").join("skill-a");
+        fs::create_dir_all(&skill_a_dir).unwrap();
+
+        let db_json = serde_json::json!({
+            "taps": {
+                "EYH0602/skillshub": {
+                    "url": "https://github.com/EYH0602/skillshub",
+                    "skills_path": "skills",
+                    "updated_at": null,
+                    "is_default": true,
+                    "cached_registry": null
+                },
+                "test-user/test-repo": {
+                    "url": "https://github.com/test-user/test-repo",
+                    "skills_path": "skills",
+                    "updated_at": null,
+                    "is_default": false,
+                    "cached_registry": null
+                }
+            },
+            "installed": {
+                "test-user/test-repo/skill-a": {
+                    "tap": "test-user/test-repo",
+                    "skill": "skill-a",
+                    "commit": null,
+                    "installed_at": "2026-01-01T00:00:00Z",
+                    "source_url": null,
+                    "source_path": null,
+                    "gist_updated_at": null
+                }
+            },
+            "linked_agents": [],
+            "external": {}
+        });
+        fs::write(skillshub_home.join("db.json"), db_json.to_string()).unwrap();
+
+        let _guard = TestHomeGuard::set(&home);
+        let result = remove_tap("test-user/test-repo", true);
+
+        assert!(result.is_ok(), "remove_tap failed: {:?}", result);
+
+        // Tap should be removed
+        let db = db::load_db().unwrap();
+        assert!(db::get_tap(&db, "test-user/test-repo").is_none());
+
+        // Skill should still be installed (files and db entry)
+        assert!(skill_a_dir.exists(), "skill-a dir should still exist");
+        assert!(
+            db::is_skill_installed(&db, "test-user/test-repo/skill-a"),
+            "skill-a should still be in db"
+        );
     }
 }

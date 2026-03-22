@@ -124,6 +124,9 @@ skillshub tap install-all anthropics/skills
 
 # Remove a tap (also uninstalls all its skills)
 skillshub tap remove vercel-labs/agent-skills
+
+# Remove a tap but keep its installed skills
+skillshub tap remove vercel-labs/agent-skills --keep-skills
 ```
 
 ### Import from GitHub Star Lists
