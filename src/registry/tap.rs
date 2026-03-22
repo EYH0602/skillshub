@@ -220,10 +220,7 @@ pub fn update_tap(name: Option<&str>) -> Result<()> {
                         result.removed_installed.len()
                     );
                     for skill in &result.removed_installed {
-                        println!(
-                            "      skillshub uninstall {}/{}",
-                            tap_name, skill
-                        );
+                        println!("      skillshub uninstall {}/{}", tap_name, skill);
                     }
                 }
             }
@@ -263,14 +260,8 @@ fn update_single_tap(db: &mut Database, name: &str, tap: &TapInfo) -> Result<Tap
         .unwrap_or_default();
     let new_skills_set: std::collections::HashSet<&String> = new_registry.skills.keys().collect();
 
-    let added: Vec<String> = new_skills_set
-        .difference(&old_skills)
-        .map(|s| (*s).clone())
-        .collect();
-    let removed: Vec<String> = old_skills
-        .difference(&new_skills_set)
-        .map(|s| (*s).clone())
-        .collect();
+    let added: Vec<String> = new_skills_set.difference(&old_skills).map(|s| (*s).clone()).collect();
+    let removed: Vec<String> = old_skills.difference(&new_skills_set).map(|s| (*s).clone()).collect();
 
     // Check which removed skills are currently installed
     let removed_installed: Vec<String> = removed
