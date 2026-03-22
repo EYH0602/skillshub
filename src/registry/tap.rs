@@ -7,8 +7,13 @@ use tabled::{
 };
 
 use super::db::{self, DEFAULT_TAP_NAME};
-use super::github::{discover_skills_from_repo, fetch_star_list_repos, parse_github_url, parse_star_list_url};
+use super::git::{git_clone, git_pull, tap_clone_path};
+use super::github::{
+    discover_skills_from_local, discover_skills_from_repo, fetch_star_list_repos, is_gist_url, parse_github_url,
+    parse_star_list_url,
+};
 use super::models::{Database, TapInfo, TapRegistry};
+use crate::paths::get_taps_clone_dir;
 use crate::util::truncate_string;
 
 const TAP_URL_MAX_LEN: usize = 50;
@@ -45,10 +50,30 @@ pub fn add_tap(url: &str, install: bool) -> Result<()> {
     let base_url = github_url.base_url();
     println!("{} Adding tap '{}' from {}", "=>".green().bold(), tap_name, base_url);
 
-    // Discover skills by scanning for SKILL.md files
-    println!("  {} Discovering skills...", "○".yellow());
-    let registry = discover_skills_from_repo(&github_url, &tap_name)
-        .with_context(|| format!("Failed to discover skills from {}", base_url))?;
+    // For gist URLs, use the API-based discovery (no local clone)
+    let registry = if is_gist_url(url) {
+        println!("  {} Discovering skills...", "○".yellow());
+        discover_skills_from_repo(&github_url, &tap_name)
+            .with_context(|| format!("Failed to discover skills from {}", base_url))?
+    } else {
+        // Clone the repo locally and discover skills from the filesystem
+        let taps_dir = get_taps_clone_dir()?;
+        let clone_dir = tap_clone_path(&taps_dir, &tap_name);
+
+        if clone_dir.exists() {
+            std::fs::remove_dir_all(&clone_dir)?;
+        }
+        if let Some(parent) = clone_dir.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        println!("  {} Cloning repository...", "○".yellow());
+        git_clone(&base_url, &clone_dir).with_context(|| format!("Failed to clone {}", base_url))?;
+
+        println!("  {} Discovering skills...", "○".yellow());
+        discover_skills_from_local(&clone_dir, &tap_name)
+            .with_context(|| format!("Failed to discover skills from {}", base_url))?
+    };
 
     let tap_info = TapInfo {
         url: base_url.clone(),
@@ -134,6 +159,26 @@ pub fn remove_tap(name: &str, keep_skills: bool) -> Result<()> {
 
     db::remove_tap(&mut db, name);
     db::save_db(&db)?;
+
+    // Clean up local clone directory
+    if let Ok(taps_dir) = get_taps_clone_dir() {
+        let clone_dir = tap_clone_path(&taps_dir, name);
+        if clone_dir.exists() {
+            if let Err(e) = std::fs::remove_dir_all(&clone_dir) {
+                eprintln!("  {} Failed to remove clone directory: {}", "!".yellow(), e);
+            }
+        }
+        // Clean up empty parent directory (owner dir)
+        if let Some(parent) = clone_dir.parent() {
+            if parent.exists() {
+                if let Ok(mut entries) = parent.read_dir() {
+                    if entries.next().is_none() {
+                        let _ = std::fs::remove_dir(parent);
+                    }
+                }
+            }
+        }
+    }
 
     println!("{} Removed tap '{}'", "✓".green(), name);
 
@@ -267,8 +312,26 @@ struct TapUpdateResult {
 
 /// Update a single tap, refresh cache, and return what changed
 fn update_single_tap(db: &mut Database, name: &str, tap: &TapInfo) -> Result<TapUpdateResult> {
-    let github_url = parse_github_url(&tap.url)?;
-    let new_registry = discover_skills_from_repo(&github_url, name)?;
+    // For gist taps, use API-based discovery (no local clone)
+    let new_registry = if is_gist_url(&tap.url) {
+        let github_url = parse_github_url(&tap.url)?;
+        discover_skills_from_repo(&github_url, name)?
+    } else {
+        let taps_dir = get_taps_clone_dir()?;
+        let clone_dir = tap_clone_path(&taps_dir, name);
+
+        // Clone if the local copy doesn't exist yet (legacy tap or first update)
+        if !clone_dir.exists() {
+            if let Some(parent) = clone_dir.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            git_clone(&tap.url, &clone_dir).with_context(|| format!("Failed to clone {}", tap.url))?;
+        } else {
+            git_pull(&clone_dir).with_context(|| format!("Failed to pull updates for {}", name))?;
+        }
+
+        discover_skills_from_local(&clone_dir, name)?
+    };
 
     // Compare old vs new registries to detect changes
     let old_skills: std::collections::HashSet<&String> = tap
@@ -881,5 +944,101 @@ mod tests {
             db::is_skill_installed(&db, "test-user/test-repo/skill-a"),
             "skill-a should still be in db"
         );
+    }
+
+    /// Removing a tap should also clean up its clone directory
+    #[test]
+    #[serial]
+    fn test_remove_tap_cleans_up_clone_dir() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        let home = temp.path().join("home");
+
+        let skillshub_home = home.join(".skillshub");
+
+        // Create fake clone dir
+        let clone_dir = skillshub_home.join("taps").join("test-user").join("test-repo");
+        fs::create_dir_all(&clone_dir).unwrap();
+        // Put a file in it to verify it gets cleaned up
+        fs::write(clone_dir.join("dummy.txt"), "test").unwrap();
+
+        // Create db.json with the tap
+        let db_json = serde_json::json!({
+            "taps": {
+                "EYH0602/skillshub": {
+                    "url": "https://github.com/EYH0602/skillshub",
+                    "skills_path": "skills",
+                    "updated_at": null,
+                    "is_default": true,
+                    "cached_registry": null
+                },
+                "test-user/test-repo": {
+                    "url": "https://github.com/test-user/test-repo",
+                    "skills_path": "skills",
+                    "updated_at": null,
+                    "is_default": false,
+                    "cached_registry": null
+                }
+            },
+            "installed": {},
+            "linked_agents": [],
+            "external": {}
+        });
+        fs::write(skillshub_home.join("db.json"), db_json.to_string()).unwrap();
+
+        let _guard = TestHomeGuard::set(&home);
+        let result = remove_tap("test-user/test-repo", false);
+        assert!(result.is_ok(), "remove_tap failed: {:?}", result);
+
+        assert!(!clone_dir.exists(), "clone dir should be removed");
+
+        // Parent owner dir should also be cleaned up since it's empty
+        let owner_dir = skillshub_home.join("taps").join("test-user");
+        assert!(!owner_dir.exists(), "empty owner dir should be removed");
+    }
+
+    /// Removing a tap when no clone directory exists should still succeed
+    #[test]
+    #[serial]
+    fn test_remove_tap_no_clone_dir() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        let home = temp.path().join("home");
+
+        let skillshub_home = home.join(".skillshub");
+
+        // No clone dir created - simulates legacy tap without local clone
+
+        let db_json = serde_json::json!({
+            "taps": {
+                "EYH0602/skillshub": {
+                    "url": "https://github.com/EYH0602/skillshub",
+                    "skills_path": "skills",
+                    "updated_at": null,
+                    "is_default": true,
+                    "cached_registry": null
+                },
+                "legacy-user/legacy-repo": {
+                    "url": "https://github.com/legacy-user/legacy-repo",
+                    "skills_path": "skills",
+                    "updated_at": null,
+                    "is_default": false,
+                    "cached_registry": null
+                }
+            },
+            "installed": {},
+            "linked_agents": [],
+            "external": {}
+        });
+        fs::create_dir_all(&skillshub_home).unwrap();
+        fs::write(skillshub_home.join("db.json"), db_json.to_string()).unwrap();
+
+        let _guard = TestHomeGuard::set(&home);
+        let result = remove_tap("legacy-user/legacy-repo", false);
+        assert!(result.is_ok(), "remove_tap should succeed even without clone dir");
     }
 }
