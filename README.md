@@ -122,7 +122,7 @@ skillshub tap update anthropics/skills      # Update specific tap
 # Install all skills from a specific tap
 skillshub tap install-all anthropics/skills
 
-# Remove a tap
+# Remove a tap (also uninstalls all its skills)
 skillshub tap remove vercel-labs/agent-skills
 ```
 

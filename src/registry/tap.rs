@@ -89,7 +89,7 @@ pub fn add_tap(url: &str, install: bool) -> Result<()> {
     Ok(())
 }
 
-/// Remove a tap
+/// Remove a tap, uninstalling all its skills first
 pub fn remove_tap(name: &str) -> Result<()> {
     let mut db = db::init_db()?;
 
@@ -101,17 +101,23 @@ pub fn remove_tap(name: &str) -> Result<()> {
         anyhow::bail!("Cannot remove the default tap '{}'", name);
     }
 
-    // Check for installed skills from this tap
+    // Uninstall all skills from this tap
     let installed_from_tap = db::get_skills_from_tap(&db, name);
     if !installed_from_tap.is_empty() {
-        let skill_names: Vec<_> = installed_from_tap.iter().map(|(n, _)| n.as_str()).collect();
-        anyhow::bail!(
-            "Cannot remove tap '{}': {} skills are installed from it.\n\
-             Uninstall these skills first: {}",
-            name,
-            installed_from_tap.len(),
-            skill_names.join(", ")
+        let skill_names: Vec<String> = installed_from_tap.iter().map(|(n, _)| (*n).clone()).collect();
+        println!(
+            "{} Uninstalling {} skill(s) from tap '{}'",
+            "=>".green().bold(),
+            skill_names.len(),
+            name
         );
+
+        for full_name in &skill_names {
+            super::skill::uninstall_skill(full_name)?;
+        }
+
+        // Re-init db since uninstall_skill saves after each removal
+        db = db::init_db()?;
     }
 
     db::remove_tap(&mut db, name);
@@ -427,6 +433,7 @@ mod tests {
     use super::*;
     use crate::registry::models::InstalledSkill;
     use chrono::Utc;
+    use serial_test::serial;
 
     #[test]
     fn test_truncate_url_short() {
@@ -635,5 +642,151 @@ mod tests {
 
         assert_eq!(added, vec!["alpha".to_string(), "beta".to_string()]);
         assert!(removed.is_empty());
+    }
+
+    /// RAII guard that restores `SKILLSHUB_TEST_HOME` on drop
+    struct TestHomeGuard(Option<String>);
+
+    impl TestHomeGuard {
+        fn set(home: &std::path::Path) -> Self {
+            let prev = std::env::var("SKILLSHUB_TEST_HOME").ok();
+            std::env::set_var("SKILLSHUB_TEST_HOME", home);
+            Self(prev)
+        }
+    }
+
+    impl Drop for TestHomeGuard {
+        fn drop(&mut self) {
+            match self.0.take() {
+                Some(v) => std::env::set_var("SKILLSHUB_TEST_HOME", v),
+                None => std::env::remove_var("SKILLSHUB_TEST_HOME"),
+            }
+        }
+    }
+
+    /// Removing a non-default tap should also uninstall all its installed skills
+    #[test]
+    #[serial]
+    fn test_remove_tap_uninstalls_skills() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        let home = temp.path().join("home");
+
+        // Create fake ~/.skillshub/skills/test-user/test-repo/skill-{a,b}
+        let skillshub_home = home.join(".skillshub");
+        let skills_dir = skillshub_home.join("skills");
+        let skill_a_dir = skills_dir.join("test-user/test-repo").join("skill-a");
+        let skill_b_dir = skills_dir.join("test-user/test-repo").join("skill-b");
+        fs::create_dir_all(&skill_a_dir).unwrap();
+        fs::create_dir_all(&skill_b_dir).unwrap();
+
+        // Create db.json with the tap and two installed skills
+        let db_json = serde_json::json!({
+            "taps": {
+                "EYH0602/skillshub": {
+                    "url": "https://github.com/EYH0602/skillshub",
+                    "skills_path": "skills",
+                    "updated_at": null,
+                    "is_default": true,
+                    "cached_registry": null
+                },
+                "test-user/test-repo": {
+                    "url": "https://github.com/test-user/test-repo",
+                    "skills_path": "skills",
+                    "updated_at": null,
+                    "is_default": false,
+                    "cached_registry": null
+                }
+            },
+            "installed": {
+                "test-user/test-repo/skill-a": {
+                    "tap": "test-user/test-repo",
+                    "skill": "skill-a",
+                    "commit": null,
+                    "installed_at": "2026-01-01T00:00:00Z",
+                    "source_url": null,
+                    "source_path": null,
+                    "gist_updated_at": null
+                },
+                "test-user/test-repo/skill-b": {
+                    "tap": "test-user/test-repo",
+                    "skill": "skill-b",
+                    "commit": null,
+                    "installed_at": "2026-01-01T00:00:00Z",
+                    "source_url": null,
+                    "source_path": null,
+                    "gist_updated_at": null
+                }
+            },
+            "linked_agents": [],
+            "external": {}
+        });
+        fs::write(skillshub_home.join("db.json"), db_json.to_string()).unwrap();
+
+        let _guard = TestHomeGuard::set(&home);
+        let result = remove_tap("test-user/test-repo");
+
+        assert!(result.is_ok(), "remove_tap failed: {:?}", result);
+
+        // Skill directories should be removed
+        assert!(!skill_a_dir.exists(), "skill-a dir should be removed");
+        assert!(!skill_b_dir.exists(), "skill-b dir should be removed");
+
+        // DB should have no installed skills from this tap and no tap entry
+        let db = db::load_db().unwrap();
+        assert!(
+            db::get_skills_from_tap(&db, "test-user/test-repo").is_empty(),
+            "no skills should remain from removed tap"
+        );
+        assert!(
+            db::get_tap(&db, "test-user/test-repo").is_none(),
+            "tap should be removed from db"
+        );
+    }
+
+    /// Removing a tap with no installed skills should still work
+    #[test]
+    #[serial]
+    fn test_remove_tap_no_skills() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        let home = temp.path().join("home");
+
+        let skillshub_home = home.join(".skillshub");
+        let db_json = serde_json::json!({
+            "taps": {
+                "EYH0602/skillshub": {
+                    "url": "https://github.com/EYH0602/skillshub",
+                    "skills_path": "skills",
+                    "updated_at": null,
+                    "is_default": true,
+                    "cached_registry": null
+                },
+                "empty-user/empty-repo": {
+                    "url": "https://github.com/empty-user/empty-repo",
+                    "skills_path": "skills",
+                    "updated_at": null,
+                    "is_default": false,
+                    "cached_registry": null
+                }
+            },
+            "installed": {},
+            "linked_agents": [],
+            "external": {}
+        });
+        fs::create_dir_all(&skillshub_home).unwrap();
+        fs::write(skillshub_home.join("db.json"), db_json.to_string()).unwrap();
+
+        let _guard = TestHomeGuard::set(&home);
+        let result = remove_tap("empty-user/empty-repo");
+
+        assert!(result.is_ok(), "remove_tap failed: {:?}", result);
+
+        let db = db::load_db().unwrap();
+        assert!(db::get_tap(&db, "empty-user/empty-repo").is_none());
     }
 }
