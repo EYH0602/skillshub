@@ -618,15 +618,17 @@ fn walk_dir_for_skills(dir: &Path, repo_root: &Path, skills: &mut HashMap<String
             // Read and parse SKILL.md
             if let Ok(content) = fs::read_to_string(&path) {
                 if let Some((name, description)) = parse_skill_md_content(&content) {
-                    skills.insert(
-                        name,
-                        SkillEntry {
-                            path: rel_path,
-                            description,
-                            homepage: None,
-                        },
-                    );
-                    continue;
+                    if is_safe_skill_name(&name) {
+                        skills.insert(
+                            name,
+                            SkillEntry {
+                                path: rel_path,
+                                description,
+                                homepage: None,
+                            },
+                        );
+                        continue;
+                    }
                 }
             }
 
@@ -636,7 +638,7 @@ fn walk_dir_for_skills(dir: &Path, repo_root: &Path, skills: &mut HashMap<String
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_default();
 
-            if !skill_name.is_empty() {
+            if !skill_name.is_empty() && is_safe_skill_name(&skill_name) {
                 skills.insert(
                     skill_name,
                     SkillEntry {

@@ -68,7 +68,8 @@ pub fn add_tap(url: &str, install: bool) -> Result<()> {
         }
 
         println!("  {} Cloning repository...", "○".yellow());
-        git_clone(&base_url, &clone_dir).with_context(|| format!("Failed to clone {}", base_url))?;
+        git_clone(&base_url, &clone_dir, github_url.branch.as_deref())
+            .with_context(|| format!("Failed to clone {}", base_url))?;
 
         println!("  {} Discovering skills...", "○".yellow());
         discover_skills_from_local(&clone_dir, &tap_name)
@@ -325,7 +326,9 @@ fn update_single_tap(db: &mut Database, name: &str, tap: &TapInfo) -> Result<Tap
             if let Some(parent) = clone_dir.parent() {
                 std::fs::create_dir_all(parent)?;
             }
-            git_clone(&tap.url, &clone_dir).with_context(|| format!("Failed to clone {}", tap.url))?;
+            let github_url = parse_github_url(&tap.url)?;
+            git_clone(&tap.url, &clone_dir, github_url.branch.as_deref())
+                .with_context(|| format!("Failed to clone {}", tap.url))?;
         } else {
             git_pull(&clone_dir).with_context(|| format!("Failed to pull updates for {}", name))?;
         }

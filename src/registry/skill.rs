@@ -123,6 +123,10 @@ fn install_skill_internal(full_name: &str) -> Result<bool> {
                 commit
             }
         }
+    } else if requested_commit.is_some() {
+        // Pinned @commit requested — must use API to fetch the exact revision
+        let (commit, _) = install_from_remote(&tap.url, &skill_entry.path, &dest, requested_commit.as_deref())?;
+        commit
     } else {
         // Try local clone first, fall back to remote download
         match install_from_clone(&skill_id.tap, &skill_entry.path, &dest) {
@@ -131,7 +135,7 @@ fn install_skill_internal(full_name: &str) -> Result<bool> {
                 commit
             }
             Err(_) => {
-                let (commit, _) = install_from_remote(&tap.url, &skill_entry.path, &dest, requested_commit.as_deref())?;
+                let (commit, _) = install_from_remote(&tap.url, &skill_entry.path, &dest, None)?;
                 commit
             }
         }

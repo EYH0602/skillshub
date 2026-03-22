@@ -12,12 +12,18 @@ pub fn tap_clone_path(taps_dir: &Path, tap_name: &str) -> PathBuf {
 }
 
 /// Clone a git repository (shallow, depth 1) to the given destination directory.
-pub fn git_clone(url: &str, dest: &Path) -> Result<()> {
-    let output = Command::new("git")
-        .args(["clone", "--depth", "1", url])
-        .arg(dest)
-        .output()
-        .context("Failed to run git clone (is git installed?)")?;
+/// If `branch` is provided, clones that specific branch.
+pub fn git_clone(url: &str, dest: &Path, branch: Option<&str>) -> Result<()> {
+    let mut cmd = Command::new("git");
+    cmd.args(["clone", "--depth", "1"]);
+
+    if let Some(b) = branch {
+        cmd.args(["-b", b]);
+    }
+
+    cmd.arg(url).arg(dest);
+
+    let output = cmd.output().context("Failed to run git clone (is git installed?)")?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -91,7 +97,7 @@ mod tests {
         let dest = temp.path().join("repo");
 
         // Clone
-        let result = git_clone("https://github.com/octocat/Hello-World.git", &dest);
+        let result = git_clone("https://github.com/octocat/Hello-World.git", &dest, None);
         assert!(result.is_ok(), "clone failed: {:?}", result);
         assert!(dest.join(".git").exists());
 
@@ -113,6 +119,7 @@ mod tests {
         let result = git_clone(
             "https://github.com/octocat/Hello-World.git",
             std::path::Path::new("/nonexistent/parent/dir/repo"),
+            None,
         );
         assert!(result.is_err());
     }
