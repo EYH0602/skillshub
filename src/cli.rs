@@ -98,10 +98,14 @@ pub enum TapCommands {
         install: bool,
     },
 
-    /// Remove a tap
+    /// Remove a tap (uninstalls its skills by default)
     Remove {
         /// Name of the tap to remove
         name: String,
+
+        /// Keep installed skills instead of uninstalling them
+        #[arg(long)]
+        keep_skills: bool,
     },
 
     /// List configured taps

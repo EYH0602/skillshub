@@ -89,8 +89,8 @@ pub fn add_tap(url: &str, install: bool) -> Result<()> {
     Ok(())
 }
 
-/// Remove a tap
-pub fn remove_tap(name: &str) -> Result<()> {
+/// Remove a tap, optionally keeping its installed skills
+pub fn remove_tap(name: &str, keep_skills: bool) -> Result<()> {
     let mut db = db::init_db()?;
 
     // Check if tap exists
@@ -101,17 +101,35 @@ pub fn remove_tap(name: &str) -> Result<()> {
         anyhow::bail!("Cannot remove the default tap '{}'", name);
     }
 
-    // Check for installed skills from this tap
+    // Handle installed skills from this tap
     let installed_from_tap = db::get_skills_from_tap(&db, name);
     if !installed_from_tap.is_empty() {
-        let skill_names: Vec<_> = installed_from_tap.iter().map(|(n, _)| n.as_str()).collect();
-        anyhow::bail!(
-            "Cannot remove tap '{}': {} skills are installed from it.\n\
-             Uninstall these skills first: {}",
-            name,
-            installed_from_tap.len(),
-            skill_names.join(", ")
-        );
+        let skill_names: Vec<String> = installed_from_tap.iter().map(|(n, _)| (*n).clone()).collect();
+
+        if keep_skills {
+            println!(
+                "  {} {} skill(s) kept but can no longer be updated (tap removed):",
+                "!".yellow().bold(),
+                skill_names.len()
+            );
+            for full_name in &skill_names {
+                println!("      {}", full_name);
+            }
+        } else {
+            println!(
+                "{} Uninstalling {} skill(s) from tap '{}'",
+                "=>".green().bold(),
+                skill_names.len(),
+                name
+            );
+
+            for full_name in &skill_names {
+                super::skill::uninstall_skill(full_name)?;
+            }
+
+            // Re-init db since uninstall_skill saves after each removal
+            db = db::init_db()?;
+        }
     }
 
     db::remove_tap(&mut db, name);
@@ -196,8 +214,33 @@ pub fn update_tap(name: Option<&str>) -> Result<()> {
         print!("  {} Updating {}...", "○".yellow(), tap_name);
 
         match update_single_tap(&mut db, &tap_name, &tap) {
-            Ok(count) => {
-                println!("\r  {} {} ({} skills)", "✓".green(), tap_name, count);
+            Ok(result) => {
+                println!("\r  {} {} ({} skills)", "✓".green(), tap_name, result.total);
+
+                if !result.new_skills.is_empty() {
+                    println!("    {} new:", "+".green());
+                    for skill in &result.new_skills {
+                        println!("      {} {}/{}", "+".green(), tap_name, skill);
+                    }
+                }
+
+                if !result.removed_skills.is_empty() {
+                    println!("    {} removed:", "-".red());
+                    for skill in &result.removed_skills {
+                        println!("      {} {}/{}", "-".red(), tap_name, skill);
+                    }
+                }
+
+                if !result.removed_installed.is_empty() {
+                    println!(
+                        "\n    {} {} installed skill(s) no longer in tap:",
+                        "!".yellow().bold(),
+                        result.removed_installed.len()
+                    );
+                    for skill in &result.removed_installed {
+                        println!("      skillshub uninstall {}/{}", tap_name, skill);
+                    }
+                }
             }
             Err(e) => {
                 println!("\r  {} {} ({})", "✗".red(), tap_name, e);
@@ -210,19 +253,74 @@ pub fn update_tap(name: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-/// Update a single tap, refresh cache, and return skill count
-fn update_single_tap(db: &mut Database, name: &str, tap: &TapInfo) -> Result<usize> {
+/// Result of updating a single tap, describing what changed
+struct TapUpdateResult {
+    /// Total number of skills in the updated registry
+    total: usize,
+    /// Skills newly added to the tap since last update
+    new_skills: Vec<String>,
+    /// Skills removed from the tap since last update
+    removed_skills: Vec<String>,
+    /// Subset of removed_skills that are currently installed (need user action)
+    removed_installed: Vec<String>,
+}
+
+/// Update a single tap, refresh cache, and return what changed
+fn update_single_tap(db: &mut Database, name: &str, tap: &TapInfo) -> Result<TapUpdateResult> {
     let github_url = parse_github_url(&tap.url)?;
-    let registry = discover_skills_from_repo(&github_url, name)?;
-    let count = registry.skills.len();
+    let new_registry = discover_skills_from_repo(&github_url, name)?;
+
+    // Compare old vs new registries to detect changes
+    let old_skills: std::collections::HashSet<&String> = tap
+        .cached_registry
+        .as_ref()
+        .map(|r| r.skills.keys().collect())
+        .unwrap_or_default();
+    let new_skills_set: std::collections::HashSet<&String> = new_registry.skills.keys().collect();
+
+    // Skip change reporting when there is no cached baseline (first update or after cache clear)
+    let has_baseline = tap.cached_registry.is_some();
+
+    let mut added: Vec<String> = if has_baseline {
+        new_skills_set.difference(&old_skills).map(|s| (*s).clone()).collect()
+    } else {
+        Vec::new()
+    };
+    let mut removed: Vec<String> = if has_baseline {
+        old_skills.difference(&new_skills_set).map(|s| (*s).clone()).collect()
+    } else {
+        Vec::new()
+    };
+
+    // Sort for deterministic output
+    added.sort();
+    removed.sort();
+
+    // Check which removed skills are currently installed
+    let mut removed_installed: Vec<String> = removed
+        .iter()
+        .filter(|skill_name| {
+            let full_name = format!("{}/{}", name, skill_name);
+            db.installed.contains_key(&full_name)
+        })
+        .cloned()
+        .collect();
+    removed_installed.sort();
+
+    let total = new_registry.skills.len();
 
     // Update cache and timestamp in database
     if let Some(t) = db.taps.get_mut(name) {
-        t.cached_registry = Some(registry);
+        t.cached_registry = Some(new_registry);
         t.updated_at = Some(Utc::now());
     }
 
-    Ok(count)
+    Ok(TapUpdateResult {
+        total,
+        new_skills: added,
+        removed_skills: removed,
+        removed_installed,
+    })
 }
 
 /// Count installed skills for a given tap
@@ -363,6 +461,7 @@ mod tests {
     use super::*;
     use crate::registry::models::InstalledSkill;
     use chrono::Utc;
+    use serial_test::serial;
 
     #[test]
     fn test_truncate_url_short() {
@@ -452,5 +551,335 @@ mod tests {
         assert_eq!(count_installed_skills(&db, "tap1"), 2);
         assert_eq!(count_installed_skills(&db, "tap2"), 1);
         assert_eq!(count_installed_skills(&db, "missing"), 0);
+    }
+
+    /// Helper to build a TapRegistry with the given skill names
+    fn make_registry(name: &str, skill_names: &[&str]) -> TapRegistry {
+        use crate::registry::models::SkillEntry;
+        let mut skills = std::collections::HashMap::new();
+        for &s in skill_names {
+            skills.insert(
+                s.to_string(),
+                SkillEntry {
+                    path: format!("skills/{}", s),
+                    description: Some(format!("{} skill", s)),
+                    homepage: None,
+                },
+            );
+        }
+        TapRegistry {
+            name: name.to_string(),
+            description: None,
+            skills,
+        }
+    }
+
+    #[test]
+    fn test_tap_update_detects_new_skills() {
+        let old_registry = make_registry("test/tap", &["alpha", "beta"]);
+        let new_registry = make_registry("test/tap", &["alpha", "beta", "gamma"]);
+
+        let old_keys: std::collections::HashSet<&String> = old_registry.skills.keys().collect();
+        let new_keys: std::collections::HashSet<&String> = new_registry.skills.keys().collect();
+
+        let added: Vec<String> = new_keys.difference(&old_keys).map(|s| (*s).clone()).collect();
+        let removed: Vec<String> = old_keys.difference(&new_keys).map(|s| (*s).clone()).collect();
+
+        assert_eq!(added, vec!["gamma".to_string()]);
+        assert!(removed.is_empty());
+    }
+
+    #[test]
+    fn test_tap_update_detects_removed_skills() {
+        let old_registry = make_registry("test/tap", &["alpha", "beta", "gamma"]);
+        let new_registry = make_registry("test/tap", &["alpha"]);
+
+        let old_keys: std::collections::HashSet<&String> = old_registry.skills.keys().collect();
+        let new_keys: std::collections::HashSet<&String> = new_registry.skills.keys().collect();
+
+        let added: Vec<String> = new_keys.difference(&old_keys).map(|s| (*s).clone()).collect();
+        let mut removed: Vec<String> = old_keys.difference(&new_keys).map(|s| (*s).clone()).collect();
+        removed.sort();
+
+        assert!(added.is_empty());
+        assert_eq!(removed, vec!["beta".to_string(), "gamma".to_string()]);
+    }
+
+    #[test]
+    fn test_tap_update_detects_removed_installed_skills() {
+        let old_registry = make_registry("test/tap", &["alpha", "beta"]);
+        let new_registry = make_registry("test/tap", &["alpha"]);
+
+        let mut db = Database::default();
+        db.installed.insert(
+            "test/tap/beta".to_string(),
+            InstalledSkill {
+                tap: "test/tap".to_string(),
+                skill: "beta".to_string(),
+                commit: None,
+                installed_at: Utc::now(),
+                source_url: None,
+                source_path: None,
+                gist_updated_at: None,
+            },
+        );
+
+        let old_keys: std::collections::HashSet<&String> = old_registry.skills.keys().collect();
+        let new_keys: std::collections::HashSet<&String> = new_registry.skills.keys().collect();
+
+        let removed: Vec<String> = old_keys.difference(&new_keys).map(|s| (*s).clone()).collect();
+        let removed_installed: Vec<String> = removed
+            .iter()
+            .filter(|skill_name| {
+                let full_name = format!("{}/{}", "test/tap", skill_name);
+                db.installed.contains_key(&full_name)
+            })
+            .cloned()
+            .collect();
+
+        assert_eq!(removed, vec!["beta".to_string()]);
+        assert_eq!(removed_installed, vec!["beta".to_string()]);
+    }
+
+    #[test]
+    fn test_tap_update_no_change() {
+        let old_registry = make_registry("test/tap", &["alpha", "beta"]);
+        let new_registry = make_registry("test/tap", &["alpha", "beta"]);
+
+        let old_keys: std::collections::HashSet<&String> = old_registry.skills.keys().collect();
+        let new_keys: std::collections::HashSet<&String> = new_registry.skills.keys().collect();
+
+        let added: Vec<String> = new_keys.difference(&old_keys).map(|s| (*s).clone()).collect();
+        let removed: Vec<String> = old_keys.difference(&new_keys).map(|s| (*s).clone()).collect();
+
+        assert!(added.is_empty());
+        assert!(removed.is_empty());
+    }
+
+    #[test]
+    fn test_tap_update_from_empty_cache() {
+        // First update (no cached registry) — all skills are "new"
+        let new_registry = make_registry("test/tap", &["alpha", "beta"]);
+
+        let old_keys: std::collections::HashSet<&String> = std::collections::HashSet::new();
+        let new_keys: std::collections::HashSet<&String> = new_registry.skills.keys().collect();
+
+        let mut added: Vec<String> = new_keys.difference(&old_keys).map(|s| (*s).clone()).collect();
+        added.sort();
+        let removed: Vec<String> = old_keys.difference(&new_keys).map(|s| (*s).clone()).collect();
+
+        assert_eq!(added, vec!["alpha".to_string(), "beta".to_string()]);
+        assert!(removed.is_empty());
+    }
+
+    /// RAII guard that restores `SKILLSHUB_TEST_HOME` on drop
+    struct TestHomeGuard(Option<String>);
+
+    impl TestHomeGuard {
+        fn set(home: &std::path::Path) -> Self {
+            let prev = std::env::var("SKILLSHUB_TEST_HOME").ok();
+            std::env::set_var("SKILLSHUB_TEST_HOME", home);
+            Self(prev)
+        }
+    }
+
+    impl Drop for TestHomeGuard {
+        fn drop(&mut self) {
+            match self.0.take() {
+                Some(v) => std::env::set_var("SKILLSHUB_TEST_HOME", v),
+                None => std::env::remove_var("SKILLSHUB_TEST_HOME"),
+            }
+        }
+    }
+
+    /// Removing a non-default tap should also uninstall all its installed skills
+    #[test]
+    #[serial]
+    fn test_remove_tap_uninstalls_skills() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        let home = temp.path().join("home");
+
+        // Create fake ~/.skillshub/skills/test-user/test-repo/skill-{a,b}
+        let skillshub_home = home.join(".skillshub");
+        let skills_dir = skillshub_home.join("skills");
+        let skill_a_dir = skills_dir.join("test-user/test-repo").join("skill-a");
+        let skill_b_dir = skills_dir.join("test-user/test-repo").join("skill-b");
+        fs::create_dir_all(&skill_a_dir).unwrap();
+        fs::create_dir_all(&skill_b_dir).unwrap();
+
+        // Create db.json with the tap and two installed skills
+        let db_json = serde_json::json!({
+            "taps": {
+                "EYH0602/skillshub": {
+                    "url": "https://github.com/EYH0602/skillshub",
+                    "skills_path": "skills",
+                    "updated_at": null,
+                    "is_default": true,
+                    "cached_registry": null
+                },
+                "test-user/test-repo": {
+                    "url": "https://github.com/test-user/test-repo",
+                    "skills_path": "skills",
+                    "updated_at": null,
+                    "is_default": false,
+                    "cached_registry": null
+                }
+            },
+            "installed": {
+                "test-user/test-repo/skill-a": {
+                    "tap": "test-user/test-repo",
+                    "skill": "skill-a",
+                    "commit": null,
+                    "installed_at": "2026-01-01T00:00:00Z",
+                    "source_url": null,
+                    "source_path": null,
+                    "gist_updated_at": null
+                },
+                "test-user/test-repo/skill-b": {
+                    "tap": "test-user/test-repo",
+                    "skill": "skill-b",
+                    "commit": null,
+                    "installed_at": "2026-01-01T00:00:00Z",
+                    "source_url": null,
+                    "source_path": null,
+                    "gist_updated_at": null
+                }
+            },
+            "linked_agents": [],
+            "external": {}
+        });
+        fs::write(skillshub_home.join("db.json"), db_json.to_string()).unwrap();
+
+        let _guard = TestHomeGuard::set(&home);
+        let result = remove_tap("test-user/test-repo", false);
+
+        assert!(result.is_ok(), "remove_tap failed: {:?}", result);
+
+        // Skill directories should be removed
+        assert!(!skill_a_dir.exists(), "skill-a dir should be removed");
+        assert!(!skill_b_dir.exists(), "skill-b dir should be removed");
+
+        // DB should have no installed skills from this tap and no tap entry
+        let db = db::load_db().unwrap();
+        assert!(
+            db::get_skills_from_tap(&db, "test-user/test-repo").is_empty(),
+            "no skills should remain from removed tap"
+        );
+        assert!(
+            db::get_tap(&db, "test-user/test-repo").is_none(),
+            "tap should be removed from db"
+        );
+    }
+
+    /// Removing a tap with no installed skills should still work
+    #[test]
+    #[serial]
+    fn test_remove_tap_no_skills() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        let home = temp.path().join("home");
+
+        let skillshub_home = home.join(".skillshub");
+        let db_json = serde_json::json!({
+            "taps": {
+                "EYH0602/skillshub": {
+                    "url": "https://github.com/EYH0602/skillshub",
+                    "skills_path": "skills",
+                    "updated_at": null,
+                    "is_default": true,
+                    "cached_registry": null
+                },
+                "empty-user/empty-repo": {
+                    "url": "https://github.com/empty-user/empty-repo",
+                    "skills_path": "skills",
+                    "updated_at": null,
+                    "is_default": false,
+                    "cached_registry": null
+                }
+            },
+            "installed": {},
+            "linked_agents": [],
+            "external": {}
+        });
+        fs::create_dir_all(&skillshub_home).unwrap();
+        fs::write(skillshub_home.join("db.json"), db_json.to_string()).unwrap();
+
+        let _guard = TestHomeGuard::set(&home);
+        let result = remove_tap("empty-user/empty-repo", false);
+
+        assert!(result.is_ok(), "remove_tap failed: {:?}", result);
+
+        let db = db::load_db().unwrap();
+        assert!(db::get_tap(&db, "empty-user/empty-repo").is_none());
+    }
+
+    /// Removing a tap with --keep-skills should remove the tap but keep skills installed
+    #[test]
+    #[serial]
+    fn test_remove_tap_keep_skills() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        let home = temp.path().join("home");
+
+        let skillshub_home = home.join(".skillshub");
+        let skills_dir = skillshub_home.join("skills");
+        let skill_a_dir = skills_dir.join("test-user/test-repo").join("skill-a");
+        fs::create_dir_all(&skill_a_dir).unwrap();
+
+        let db_json = serde_json::json!({
+            "taps": {
+                "EYH0602/skillshub": {
+                    "url": "https://github.com/EYH0602/skillshub",
+                    "skills_path": "skills",
+                    "updated_at": null,
+                    "is_default": true,
+                    "cached_registry": null
+                },
+                "test-user/test-repo": {
+                    "url": "https://github.com/test-user/test-repo",
+                    "skills_path": "skills",
+                    "updated_at": null,
+                    "is_default": false,
+                    "cached_registry": null
+                }
+            },
+            "installed": {
+                "test-user/test-repo/skill-a": {
+                    "tap": "test-user/test-repo",
+                    "skill": "skill-a",
+                    "commit": null,
+                    "installed_at": "2026-01-01T00:00:00Z",
+                    "source_url": null,
+                    "source_path": null,
+                    "gist_updated_at": null
+                }
+            },
+            "linked_agents": [],
+            "external": {}
+        });
+        fs::write(skillshub_home.join("db.json"), db_json.to_string()).unwrap();
+
+        let _guard = TestHomeGuard::set(&home);
+        let result = remove_tap("test-user/test-repo", true);
+
+        assert!(result.is_ok(), "remove_tap failed: {:?}", result);
+
+        // Tap should be removed
+        let db = db::load_db().unwrap();
+        assert!(db::get_tap(&db, "test-user/test-repo").is_none());
+
+        // Skill should still be installed (files and db entry)
+        assert!(skill_a_dir.exists(), "skill-a dir should still exist");
+        assert!(
+            db::is_skill_installed(&db, "test-user/test-repo/skill-a"),
+            "skill-a should still be in db"
+        );
     }
 }
