@@ -278,11 +278,26 @@ fn update_single_tap(db: &mut Database, name: &str, tap: &TapInfo) -> Result<Tap
         .unwrap_or_default();
     let new_skills_set: std::collections::HashSet<&String> = new_registry.skills.keys().collect();
 
-    let added: Vec<String> = new_skills_set.difference(&old_skills).map(|s| (*s).clone()).collect();
-    let removed: Vec<String> = old_skills.difference(&new_skills_set).map(|s| (*s).clone()).collect();
+    // Skip change reporting when there is no cached baseline (first update or after cache clear)
+    let has_baseline = tap.cached_registry.is_some();
+
+    let mut added: Vec<String> = if has_baseline {
+        new_skills_set.difference(&old_skills).map(|s| (*s).clone()).collect()
+    } else {
+        Vec::new()
+    };
+    let mut removed: Vec<String> = if has_baseline {
+        old_skills.difference(&new_skills_set).map(|s| (*s).clone()).collect()
+    } else {
+        Vec::new()
+    };
+
+    // Sort for deterministic output
+    added.sort();
+    removed.sort();
 
     // Check which removed skills are currently installed
-    let removed_installed: Vec<String> = removed
+    let mut removed_installed: Vec<String> = removed
         .iter()
         .filter(|skill_name| {
             let full_name = format!("{}/{}", name, skill_name);
@@ -290,6 +305,7 @@ fn update_single_tap(db: &mut Database, name: &str, tap: &TapInfo) -> Result<Tap
         })
         .cloned()
         .collect();
+    removed_installed.sort();
 
     let total = new_registry.skills.len();
 
