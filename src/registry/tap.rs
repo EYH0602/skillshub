@@ -196,8 +196,36 @@ pub fn update_tap(name: Option<&str>) -> Result<()> {
         print!("  {} Updating {}...", "○".yellow(), tap_name);
 
         match update_single_tap(&mut db, &tap_name, &tap) {
-            Ok(count) => {
-                println!("\r  {} {} ({} skills)", "✓".green(), tap_name, count);
+            Ok(result) => {
+                println!("\r  {} {} ({} skills)", "✓".green(), tap_name, result.total);
+
+                if !result.new_skills.is_empty() {
+                    println!("    {} new:", "+".green());
+                    for skill in &result.new_skills {
+                        println!("      {} {}/{}", "+".green(), tap_name, skill);
+                    }
+                }
+
+                if !result.removed_skills.is_empty() {
+                    println!("    {} removed:", "-".red());
+                    for skill in &result.removed_skills {
+                        println!("      {} {}/{}", "-".red(), tap_name, skill);
+                    }
+                }
+
+                if !result.removed_installed.is_empty() {
+                    println!(
+                        "\n    {} {} installed skill(s) no longer in tap:",
+                        "!".yellow().bold(),
+                        result.removed_installed.len()
+                    );
+                    for skill in &result.removed_installed {
+                        println!(
+                            "      skillshub uninstall {}/{}",
+                            tap_name, skill
+                        );
+                    }
+                }
             }
             Err(e) => {
                 println!("\r  {} {} ({})", "✗".red(), tap_name, e);
@@ -210,19 +238,64 @@ pub fn update_tap(name: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-/// Update a single tap, refresh cache, and return skill count
-fn update_single_tap(db: &mut Database, name: &str, tap: &TapInfo) -> Result<usize> {
+/// Result of updating a single tap, describing what changed
+struct TapUpdateResult {
+    /// Total number of skills in the updated registry
+    total: usize,
+    /// Skills newly added to the tap since last update
+    new_skills: Vec<String>,
+    /// Skills removed from the tap since last update
+    removed_skills: Vec<String>,
+    /// Subset of removed_skills that are currently installed (need user action)
+    removed_installed: Vec<String>,
+}
+
+/// Update a single tap, refresh cache, and return what changed
+fn update_single_tap(db: &mut Database, name: &str, tap: &TapInfo) -> Result<TapUpdateResult> {
     let github_url = parse_github_url(&tap.url)?;
-    let registry = discover_skills_from_repo(&github_url, name)?;
-    let count = registry.skills.len();
+    let new_registry = discover_skills_from_repo(&github_url, name)?;
+
+    // Compare old vs new registries to detect changes
+    let old_skills: std::collections::HashSet<&String> = tap
+        .cached_registry
+        .as_ref()
+        .map(|r| r.skills.keys().collect())
+        .unwrap_or_default();
+    let new_skills_set: std::collections::HashSet<&String> = new_registry.skills.keys().collect();
+
+    let added: Vec<String> = new_skills_set
+        .difference(&old_skills)
+        .map(|s| (*s).clone())
+        .collect();
+    let removed: Vec<String> = old_skills
+        .difference(&new_skills_set)
+        .map(|s| (*s).clone())
+        .collect();
+
+    // Check which removed skills are currently installed
+    let removed_installed: Vec<String> = removed
+        .iter()
+        .filter(|skill_name| {
+            let full_name = format!("{}/{}", name, skill_name);
+            db.installed.contains_key(&full_name)
+        })
+        .cloned()
+        .collect();
+
+    let total = new_registry.skills.len();
 
     // Update cache and timestamp in database
     if let Some(t) = db.taps.get_mut(name) {
-        t.cached_registry = Some(registry);
+        t.cached_registry = Some(new_registry);
         t.updated_at = Some(Utc::now());
     }
 
-    Ok(count)
+    Ok(TapUpdateResult {
+        total,
+        new_skills: added,
+        removed_skills: removed,
+        removed_installed,
+    })
 }
 
 /// Count installed skills for a given tap
@@ -452,5 +525,124 @@ mod tests {
         assert_eq!(count_installed_skills(&db, "tap1"), 2);
         assert_eq!(count_installed_skills(&db, "tap2"), 1);
         assert_eq!(count_installed_skills(&db, "missing"), 0);
+    }
+
+    /// Helper to build a TapRegistry with the given skill names
+    fn make_registry(name: &str, skill_names: &[&str]) -> TapRegistry {
+        use crate::registry::models::SkillEntry;
+        let mut skills = std::collections::HashMap::new();
+        for &s in skill_names {
+            skills.insert(
+                s.to_string(),
+                SkillEntry {
+                    path: format!("skills/{}", s),
+                    description: Some(format!("{} skill", s)),
+                    homepage: None,
+                },
+            );
+        }
+        TapRegistry {
+            name: name.to_string(),
+            description: None,
+            skills,
+        }
+    }
+
+    #[test]
+    fn test_tap_update_detects_new_skills() {
+        let old_registry = make_registry("test/tap", &["alpha", "beta"]);
+        let new_registry = make_registry("test/tap", &["alpha", "beta", "gamma"]);
+
+        let old_keys: std::collections::HashSet<&String> = old_registry.skills.keys().collect();
+        let new_keys: std::collections::HashSet<&String> = new_registry.skills.keys().collect();
+
+        let added: Vec<String> = new_keys.difference(&old_keys).map(|s| (*s).clone()).collect();
+        let removed: Vec<String> = old_keys.difference(&new_keys).map(|s| (*s).clone()).collect();
+
+        assert_eq!(added, vec!["gamma".to_string()]);
+        assert!(removed.is_empty());
+    }
+
+    #[test]
+    fn test_tap_update_detects_removed_skills() {
+        let old_registry = make_registry("test/tap", &["alpha", "beta", "gamma"]);
+        let new_registry = make_registry("test/tap", &["alpha"]);
+
+        let old_keys: std::collections::HashSet<&String> = old_registry.skills.keys().collect();
+        let new_keys: std::collections::HashSet<&String> = new_registry.skills.keys().collect();
+
+        let added: Vec<String> = new_keys.difference(&old_keys).map(|s| (*s).clone()).collect();
+        let mut removed: Vec<String> = old_keys.difference(&new_keys).map(|s| (*s).clone()).collect();
+        removed.sort();
+
+        assert!(added.is_empty());
+        assert_eq!(removed, vec!["beta".to_string(), "gamma".to_string()]);
+    }
+
+    #[test]
+    fn test_tap_update_detects_removed_installed_skills() {
+        let old_registry = make_registry("test/tap", &["alpha", "beta"]);
+        let new_registry = make_registry("test/tap", &["alpha"]);
+
+        let mut db = Database::default();
+        db.installed.insert(
+            "test/tap/beta".to_string(),
+            InstalledSkill {
+                tap: "test/tap".to_string(),
+                skill: "beta".to_string(),
+                commit: None,
+                installed_at: Utc::now(),
+                source_url: None,
+                source_path: None,
+                gist_updated_at: None,
+            },
+        );
+
+        let old_keys: std::collections::HashSet<&String> = old_registry.skills.keys().collect();
+        let new_keys: std::collections::HashSet<&String> = new_registry.skills.keys().collect();
+
+        let removed: Vec<String> = old_keys.difference(&new_keys).map(|s| (*s).clone()).collect();
+        let removed_installed: Vec<String> = removed
+            .iter()
+            .filter(|skill_name| {
+                let full_name = format!("{}/{}", "test/tap", skill_name);
+                db.installed.contains_key(&full_name)
+            })
+            .cloned()
+            .collect();
+
+        assert_eq!(removed, vec!["beta".to_string()]);
+        assert_eq!(removed_installed, vec!["beta".to_string()]);
+    }
+
+    #[test]
+    fn test_tap_update_no_change() {
+        let old_registry = make_registry("test/tap", &["alpha", "beta"]);
+        let new_registry = make_registry("test/tap", &["alpha", "beta"]);
+
+        let old_keys: std::collections::HashSet<&String> = old_registry.skills.keys().collect();
+        let new_keys: std::collections::HashSet<&String> = new_registry.skills.keys().collect();
+
+        let added: Vec<String> = new_keys.difference(&old_keys).map(|s| (*s).clone()).collect();
+        let removed: Vec<String> = old_keys.difference(&new_keys).map(|s| (*s).clone()).collect();
+
+        assert!(added.is_empty());
+        assert!(removed.is_empty());
+    }
+
+    #[test]
+    fn test_tap_update_from_empty_cache() {
+        // First update (no cached registry) — all skills are "new"
+        let new_registry = make_registry("test/tap", &["alpha", "beta"]);
+
+        let old_keys: std::collections::HashSet<&String> = std::collections::HashSet::new();
+        let new_keys: std::collections::HashSet<&String> = new_registry.skills.keys().collect();
+
+        let mut added: Vec<String> = new_keys.difference(&old_keys).map(|s| (*s).clone()).collect();
+        added.sort();
+        let removed: Vec<String> = old_keys.difference(&new_keys).map(|s| (*s).clone()).collect();
+
+        assert_eq!(added, vec!["alpha".to_string(), "beta".to_string()]);
+        assert!(removed.is_empty());
     }
 }
