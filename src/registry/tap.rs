@@ -12,8 +12,8 @@ use walkdir::WalkDir;
 use super::db::{self, DEFAULT_TAP_NAME};
 use super::git::{git_clone, pull_or_reclone, tap_clone_path};
 use super::github::{
-    discover_skills_from_repo, fetch_star_list_repos, is_gist_url, is_safe_skill_name,
-    parse_github_url, parse_skill_md_content, parse_star_list_url,
+    discover_skills_from_repo, fetch_star_list_repos, is_gist_url, is_safe_skill_name, parse_github_url,
+    parse_skill_md_content, parse_star_list_url,
 };
 use super::models::{Database, SkillEntry, TapInfo, TapRegistry};
 use crate::paths::get_taps_clone_dir;
@@ -1431,7 +1431,11 @@ mod tests {
         .unwrap();
 
         let registry = discover_skills_from_local(temp.path(), "test/tap").unwrap();
-        assert_eq!(registry.skills.len(), 1, "Only the safe skill should be in the registry");
+        assert_eq!(
+            registry.skills.len(),
+            1,
+            "Only the safe skill should be in the registry"
+        );
         assert!(registry.skills.contains_key("legit"));
     }
 }
