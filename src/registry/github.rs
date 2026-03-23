@@ -570,6 +570,7 @@ pub(crate) fn parse_skill_md_content(content: &str) -> Option<(String, Option<St
 }
 
 /// Get the latest commit SHA for a path in a repository
+#[allow(dead_code)] // Will be removed in github.rs cleanup (Task 12)
 pub fn get_latest_commit(github_url: &GitHubUrl, path: Option<&str>, resolved_branch: &str) -> Result<String> {
     let client = build_client()?;
 
@@ -597,6 +598,7 @@ pub fn get_latest_commit(github_url: &GitHubUrl, path: Option<&str>, resolved_br
 /// Download and extract a skill from a GitHub repository
 ///
 /// Downloads the tarball, extracts the specific skill folder, and copies to destination.
+#[allow(dead_code)] // Will be removed in github.rs cleanup (Task 12)
 pub fn download_skill(github_url: &GitHubUrl, skill_path: &str, dest: &Path, commit: Option<&str>) -> Result<String> {
     // Resolve branch: use specified branch or fetch the repository's default branch
     let resolved_branch = match &github_url.branch {

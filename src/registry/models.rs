@@ -180,6 +180,7 @@ impl GitHubUrl {
     }
 
     /// Get the tarball URL for downloading
+    #[allow(dead_code)] // Will be removed in github.rs cleanup (Task 12)
     pub fn tarball_url(&self, git_ref: &str) -> String {
         format!(
             "{}/repos/{}/{}/tarball/{}",
