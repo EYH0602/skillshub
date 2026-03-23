@@ -24,7 +24,7 @@ pub fn run_doctor() -> Result<usize> {
     // 2. Clone health -- for each tap, verify clone dir
     let db = db::load_db()?;
     for (name, tap) in &db.taps {
-        if tap.url.contains("gist.github.com") {
+        if tap.url.contains("gist.github.com") || tap.is_default {
             continue;
         }
         let clone_dir = crate::paths::get_tap_clone_dir(name)?;

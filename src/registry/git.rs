@@ -102,11 +102,28 @@ pub fn ensure_clone(clone_dir: &Path, url: &str, branch: Option<&str>) -> Result
             false
         };
 
-        if rev_ok && remote_ok {
+        // Verify checked-out branch matches requested branch (if specified)
+        let branch_ok = if rev_ok && remote_ok {
+            match branch {
+                Some(expected) => {
+                    let current = Command::new("git")
+                        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+                        .current_dir(clone_dir)
+                        .output();
+                    matches!(current, Ok(ref output) if output.status.success()
+                        && String::from_utf8_lossy(&output.stdout).trim() == expected)
+                }
+                None => true, // No specific branch requested, any branch is fine
+            }
+        } else {
+            false
+        };
+
+        if rev_ok && remote_ok && branch_ok {
             return Ok(clone_dir.to_path_buf());
         }
 
-        // Corrupted or wrong remote — remove and re-clone
+        // Corrupted, wrong remote, or wrong branch — remove and re-clone
         eprintln!("  Re-cloning tap (clone was corrupted or remote changed)...");
         std::fs::remove_dir_all(clone_dir)?;
     }
@@ -348,6 +365,59 @@ mod tests {
         // HEAD sha should be the same (no re-clone happened)
         let sha_after = git_head_sha(&clone_dir).unwrap();
         assert_eq!(sha_before, sha_after);
+    }
+
+    #[test]
+    fn test_ensure_clone_reclones_wrong_branch() {
+        let temp = tempfile::TempDir::new().unwrap();
+
+        // Create origin with a "feature" branch that has a unique file
+        let origin = create_local_repo_with_branch(temp.path(), "feature");
+        let url = file_url(&origin);
+
+        // Clone specifically on "feature" branch
+        let clone_dir = temp.path().join("clone");
+        git_clone(&url, &clone_dir, Some("feature")).unwrap();
+        assert!(clone_dir.join("BRANCH.md").exists());
+
+        // Detect what branch the clone is on
+        let branch_out = StdCommand::new("git")
+            .args(["rev-parse", "--abbrev-ref", "HEAD"])
+            .current_dir(&clone_dir)
+            .output()
+            .unwrap();
+        let current_branch = String::from_utf8_lossy(&branch_out.stdout).trim().to_string();
+        assert_eq!(current_branch, "feature");
+
+        // Create a "release" branch on origin with different content
+        StdCommand::new("git")
+            .args(["checkout", "-b", "release"])
+            .current_dir(&origin)
+            .output()
+            .unwrap();
+        std::fs::write(origin.join("release.txt"), "release\n").unwrap();
+        StdCommand::new("git")
+            .args(["add", "."])
+            .current_dir(&origin)
+            .output()
+            .unwrap();
+        StdCommand::new("git")
+            .args(["commit", "-m", "release commit"])
+            .current_dir(&origin)
+            .output()
+            .unwrap();
+
+        // ensure_clone with branch="release" should detect branch mismatch and re-clone
+        let result = ensure_clone(&clone_dir, &url, Some("release"));
+        assert!(
+            result.is_ok(),
+            "ensure_clone should re-clone for wrong branch: {:?}",
+            result
+        );
+        assert!(
+            clone_dir.join("release.txt").exists(),
+            "should have release branch content after re-clone"
+        );
     }
 
     #[test]

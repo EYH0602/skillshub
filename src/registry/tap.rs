@@ -53,6 +53,9 @@ pub fn add_tap(url: &str, branch: Option<&str>, install: bool) -> Result<()> {
     let base_url = github_url.base_url();
     println!("{} Adding tap '{}' from {}", "=>".green().bold(), tap_name, base_url);
 
+    // CLI --branch overrides URL-parsed branch; either is persisted in TapInfo
+    let effective_branch = branch.or(github_url.branch.as_deref());
+
     // For gist URLs, use the API-based discovery (no local clone)
     let registry = if is_gist_url(url) {
         println!("  {} Discovering skills...", "○".yellow());
@@ -71,7 +74,6 @@ pub fn add_tap(url: &str, branch: Option<&str>, install: bool) -> Result<()> {
         }
 
         println!("  {} Cloning repository...", "○".yellow());
-        let effective_branch = branch.or(github_url.branch.as_deref());
         git_clone(&base_url, &clone_dir, effective_branch).with_context(|| format!("Failed to clone {}", base_url))?;
 
         println!("  {} Discovering skills...", "○".yellow());
@@ -85,7 +87,7 @@ pub fn add_tap(url: &str, branch: Option<&str>, install: bool) -> Result<()> {
         updated_at: Some(Utc::now()),
         is_default: false,
         cached_registry: Some(registry.clone()),
-        branch: branch.map(|s| s.to_string()),
+        branch: effective_branch.map(|s| s.to_string()),
     };
 
     db::add_tap(&mut db, &tap_name, tap_info);
