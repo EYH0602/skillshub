@@ -7,6 +7,8 @@ on:
     pull_request:
         branches:
             - main
+    schedule:
+        - cron: '0 8 * * 1'
 
 jobs:
     ci:
@@ -36,3 +38,19 @@ jobs:
 
             - name: Tests
               run: cargo test --all-features
+
+    audit:
+        runs-on: ubuntu-latest
+        continue-on-error: true
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Install Rust toolchain
+              uses: dtolnay/rust-toolchain@stable
+
+            - name: Install cargo-audit
+              run: cargo install cargo-audit
+
+            - name: Run cargo audit
+              run: cargo audit
