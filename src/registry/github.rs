@@ -1,13 +1,8 @@
 use anyhow::{anyhow, Context, Result};
-use flate2::read::GzDecoder;
 use reqwest::blocking::{Client, RequestBuilder, Response};
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::fs;
-use std::io::Cursor;
-use std::path::Path;
 use std::time::{Duration, SystemTime};
-use tar::Archive;
 
 use super::models::{GitHubUrl, SkillEntry, TapRegistry};
 use crate::skill::SkillMetadata;
@@ -569,117 +564,6 @@ pub(crate) fn parse_skill_md_content(content: &str) -> Option<(String, Option<St
     Some((metadata.name, metadata.description))
 }
 
-/// Get the latest commit SHA for a path in a repository
-#[allow(dead_code)] // Will be removed in github.rs cleanup (Task 12)
-pub fn get_latest_commit(github_url: &GitHubUrl, path: Option<&str>, resolved_branch: &str) -> Result<String> {
-    let client = build_client()?;
-
-    let mut url = format!("{}/commits?sha={}&per_page=1", github_url.api_url(), resolved_branch);
-
-    if let Some(p) = path {
-        url.push_str(&format!("&path={}", p));
-    }
-
-    let response = send_with_retry(|| with_auth(client.get(&url)), &url)?;
-
-    if !response.status().is_success() {
-        anyhow::bail!("Failed to fetch commits: HTTP {}", response.status());
-    }
-
-    let commits: Vec<serde_json::Value> = response.json()?;
-
-    commits
-        .first()
-        .and_then(|c| c["sha"].as_str())
-        .map(|s| s[..7].to_string()) // Short SHA
-        .with_context(|| "No commits found")
-}
-
-/// Download and extract a skill from a GitHub repository
-///
-/// Downloads the tarball, extracts the specific skill folder, and copies to destination.
-#[allow(dead_code)] // Will be removed in github.rs cleanup (Task 12)
-pub fn download_skill(github_url: &GitHubUrl, skill_path: &str, dest: &Path, commit: Option<&str>) -> Result<String> {
-    // Resolve branch: use specified branch or fetch the repository's default branch
-    let resolved_branch = match &github_url.branch {
-        Some(b) => b.clone(),
-        None => get_default_branch(&github_url.owner, &github_url.repo)?,
-    };
-
-    let git_ref = commit.unwrap_or(&resolved_branch);
-
-    let client = build_client()?;
-
-    // Download tarball
-    let tarball_url = github_url.tarball_url(git_ref);
-    let response = send_with_retry(|| with_auth(client.get(&tarball_url)), &tarball_url)?;
-
-    if !response.status().is_success() {
-        anyhow::bail!(
-            "Failed to download tarball: HTTP {} from {}",
-            response.status(),
-            tarball_url
-        );
-    }
-
-    let bytes = response.bytes()?;
-
-    // Get the actual commit SHA from response headers or fetch it
-    let commit_sha = commit.map(|s| s.to_string()).unwrap_or_else(|| {
-        get_latest_commit(github_url, Some(skill_path), &resolved_branch).unwrap_or_else(|err| {
-            println!(
-                "Warning: failed to resolve latest commit for {} ({}), using {}",
-                github_url.repo, err, git_ref
-            );
-            git_ref.to_string()
-        })
-    });
-
-    // Extract tarball
-    let cursor = Cursor::new(bytes);
-    let decoder = GzDecoder::new(cursor);
-    let mut archive = Archive::new(decoder);
-
-    // Create temp directory for extraction
-    let temp_dir = tempfile::tempdir()?;
-
-    // Extract all files
-    archive.unpack(temp_dir.path())?;
-
-    // Find the extracted directory (GitHub tarballs have a prefix like "owner-repo-sha/")
-    let extracted_dir = fs::read_dir(temp_dir.path())?
-        .filter_map(|e| e.ok())
-        .find(|e| e.path().is_dir())
-        .with_context(|| "Failed to find extracted directory")?
-        .path();
-
-    // Find the skill within the extracted archive
-    // For root-level skills (empty path), the skill is the extracted directory itself
-    let skill_source = if skill_path.is_empty() {
-        extracted_dir.clone()
-    } else {
-        extracted_dir.join(skill_path)
-    };
-
-    if !skill_source.exists() {
-        anyhow::bail!("Skill path '{}' not found in repository", skill_path);
-    }
-
-    // Verify it has SKILL.md
-    if !skill_source.join("SKILL.md").exists() {
-        anyhow::bail!(
-            "Invalid skill: no SKILL.md found in '{}'",
-            if skill_path.is_empty() { "(root)" } else { skill_path }
-        );
-    }
-
-    // Create destination and copy files
-    fs::create_dir_all(dest)?;
-    copy_dir_contents(&skill_source, dest)?;
-
-    Ok(commit_sha)
-}
-
 /// Extract skill directory paths from a list of tree entries.
 ///
 /// Finds entries that are SKILL.md files (either at root or in subdirectories)
@@ -696,32 +580,6 @@ fn extract_skill_paths(tree: &[TreeEntry]) -> Vec<String> {
                 .unwrap_or_default()
         })
         .collect()
-}
-
-/// Recursively copy directory contents
-///
-/// Symlinks are skipped as a defense-in-depth measure to prevent a malicious
-/// cloned repo from including symlinks that point outside the clone directory.
-pub(crate) fn copy_dir_contents(src: &Path, dst: &Path) -> Result<()> {
-    for entry in fs::read_dir(src)? {
-        let entry = entry?;
-
-        // Skip symlinks to avoid following links that escape the source tree
-        if entry.file_type()?.is_symlink() {
-            continue;
-        }
-
-        let src_path = entry.path();
-        let dst_path = dst.join(entry.file_name());
-
-        if src_path.is_dir() {
-            fs::create_dir_all(&dst_path)?;
-            copy_dir_contents(&src_path, &dst_path)?;
-        } else {
-            fs::copy(&src_path, &dst_path)?;
-        }
-    }
-    Ok(())
 }
 
 /// Check if a URL points to a GitHub Gist
@@ -2168,54 +2026,5 @@ name: minimal-skill
         assert!(names.contains(&"skill-two"));
 
         std::env::remove_var("SKILLSHUB_GITHUB_API_BASE");
-    }
-
-    #[test]
-    #[cfg(unix)]
-    fn test_copy_dir_contents_skips_symlinks() {
-        use std::os::unix::fs::symlink;
-
-        let temp = tempfile::TempDir::new().unwrap();
-        let src = temp.path().join("src");
-        let dst = temp.path().join("dst");
-        std::fs::create_dir_all(&src).unwrap();
-        std::fs::create_dir_all(&dst).unwrap();
-
-        // Create a regular file
-        std::fs::write(src.join("real.txt"), "real content").unwrap();
-
-        // Create a subdirectory with a file
-        let subdir = src.join("subdir");
-        std::fs::create_dir_all(&subdir).unwrap();
-        std::fs::write(subdir.join("nested.txt"), "nested content").unwrap();
-
-        // Create a symlink to a file outside the source tree
-        let outside = temp.path().join("outside.txt");
-        std::fs::write(&outside, "outside content").unwrap();
-        symlink(&outside, src.join("link-to-file")).unwrap();
-
-        // Create a symlink to a directory outside the source tree
-        let outside_dir = temp.path().join("outside-dir");
-        std::fs::create_dir_all(&outside_dir).unwrap();
-        std::fs::write(outside_dir.join("secret.txt"), "secret").unwrap();
-        symlink(&outside_dir, src.join("link-to-dir")).unwrap();
-
-        // Run copy
-        copy_dir_contents(&src, &dst).unwrap();
-
-        // Regular file and subdirectory should be copied
-        assert!(dst.join("real.txt").exists(), "regular file should be copied");
-        assert_eq!(std::fs::read_to_string(dst.join("real.txt")).unwrap(), "real content");
-        assert!(
-            dst.join("subdir").join("nested.txt").exists(),
-            "nested file should be copied"
-        );
-
-        // Symlinks should NOT be copied
-        assert!(!dst.join("link-to-file").exists(), "symlink to file should be skipped");
-        assert!(
-            !dst.join("link-to-dir").exists(),
-            "symlink to directory should be skipped"
-        );
     }
 }

@@ -8,15 +8,13 @@ use tabled::{
 
 use super::db::{self, DEFAULT_TAP_NAME};
 use super::git::{ensure_clone, git_head_sha, tap_clone_path};
-use super::github::{
-    copy_dir_contents, discover_skills_from_gist, fetch_gist, is_gist_url, parse_gist_url, parse_github_url,
-};
+use super::github::{discover_skills_from_gist, fetch_gist, is_gist_url, parse_gist_url, parse_github_url};
 use super::models::{InstalledSkill, SkillId};
 use super::tap::get_tap_registry;
 use crate::commands::link_to_agents;
 use crate::paths::{get_embedded_skills_dir, get_skills_install_dir, get_tap_clone_dir, get_taps_clone_dir};
 use crate::skill::{discover_skills, parse_skill_metadata};
-use crate::util::truncate_string;
+use crate::util::{copy_dir_contents, truncate_string};
 
 const DESCRIPTION_MAX_LEN: usize = 50;
 
