@@ -45,6 +45,10 @@ pub struct TapInfo {
     /// This is populated when the tap is added or updated
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cached_registry: Option<TapRegistry>,
+
+    /// Which branch was cloned (None = repo default branch)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
 }
 
 /// Information about an installed skill
@@ -360,6 +364,7 @@ mod tests {
             updated_at: None,
             is_default: false,
             cached_registry: None,
+            branch: None,
         };
 
         let json = serde_json::to_string(&tap).unwrap();
@@ -392,6 +397,7 @@ mod tests {
             updated_at: None,
             is_default: false,
             cached_registry: Some(registry),
+            branch: None,
         };
 
         let json = serde_json::to_string(&tap).unwrap();
@@ -446,6 +452,7 @@ mod tests {
             updated_at: Some(chrono::Utc::now()),
             is_default: false,
             cached_registry: Some(registry),
+            branch: None,
         };
 
         // Serialize and deserialize
@@ -490,5 +497,55 @@ mod tests {
         }"#;
         let skill: InstalledSkill = serde_json::from_str(json).unwrap();
         assert!(skill.gist_updated_at.is_none());
+    }
+
+    #[test]
+    fn test_tap_info_deserialize_without_branch() {
+        // Legacy db.json without the branch field should deserialize with branch = None
+        let json = r#"{
+            "url": "https://github.com/user/repo",
+            "skills_path": "skills",
+            "updated_at": null,
+            "is_default": false
+        }"#;
+
+        let tap: TapInfo = serde_json::from_str(json).unwrap();
+        assert!(tap.branch.is_none());
+        assert_eq!(tap.url, "https://github.com/user/repo");
+    }
+
+    #[test]
+    fn test_tap_info_serialize_roundtrip_with_branch() {
+        let tap = TapInfo {
+            url: "https://github.com/owner/repo".to_string(),
+            skills_path: "skills".to_string(),
+            updated_at: None,
+            is_default: false,
+            cached_registry: None,
+            branch: Some("dev".to_string()),
+        };
+
+        let json = serde_json::to_string(&tap).unwrap();
+        assert!(json.contains("\"branch\":\"dev\""));
+
+        let restored: TapInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.branch, Some("dev".to_string()));
+        assert_eq!(restored.url, "https://github.com/owner/repo");
+    }
+
+    #[test]
+    fn test_tap_info_branch_none_not_serialized() {
+        let tap = TapInfo {
+            url: "https://github.com/owner/repo".to_string(),
+            skills_path: "skills".to_string(),
+            updated_at: None,
+            is_default: false,
+            cached_registry: None,
+            branch: None,
+        };
+
+        let json = serde_json::to_string(&tap).unwrap();
+        // branch should be skipped when None (skip_serializing_if)
+        assert!(!json.contains("branch"));
     }
 }

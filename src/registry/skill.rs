@@ -221,6 +221,7 @@ pub fn add_skill_from_url(url: &str) -> Result<()> {
             updated_at: Some(Utc::now()),
             is_default: false,
             cached_registry: registry,
+            branch: github_url.branch.clone(),
         };
         db::add_tap(&mut db, &tap_name, tap_info);
     }
@@ -284,6 +285,7 @@ pub fn add_skill_from_gist(url: &str) -> Result<()> {
             updated_at: Some(Utc::now()),
             is_default: false,
             cached_registry: None,
+            branch: None,
         };
         db::add_tap(&mut db, &tap_name, tap_info);
     }
@@ -582,7 +584,7 @@ pub fn update_skill(full_name: Option<&str>) -> Result<()> {
         }
 
         // Pull latest using resilient pull_or_reclone
-        if let Err(e) = super::git::pull_or_reclone(&clone_dir, &tap.url, None) {
+        if let Err(e) = super::git::pull_or_reclone(&clone_dir, &tap.url, tap.branch.as_deref()) {
             println!("  {} {} (pull failed: {})", "✗".red(), skill_name, e);
             continue;
         }
@@ -1064,6 +1066,7 @@ mod tests {
                 updated_at: None,
                 is_default: false,
                 cached_registry: None,
+                branch: None,
             },
         );
 

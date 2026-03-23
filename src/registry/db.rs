@@ -115,6 +115,7 @@ fn default_taps() -> Vec<(&'static str, TapInfo)> {
             updated_at: None,
             is_default: true,
             cached_registry: None,
+            branch: None,
         },
     )]
 }
@@ -288,6 +289,7 @@ mod tests {
             updated_at: None,
             is_default: false,
             cached_registry: None,
+            branch: None,
         };
 
         add_tap(&mut db, "my-tap", tap);
@@ -375,6 +377,7 @@ mod tests {
             updated_at: None,
             is_default,
             cached_registry: None,
+            branch: None,
         }
     }
 

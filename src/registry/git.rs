@@ -120,7 +120,6 @@ pub fn ensure_clone(clone_dir: &Path, url: &str, branch: Option<&str>) -> Result
 }
 
 /// Pull latest changes, falling back to delete + re-clone on failure.
-#[allow(dead_code)]
 pub fn pull_or_reclone(clone_dir: &Path, url: &str, branch: Option<&str>) -> Result<()> {
     match git_pull(clone_dir) {
         Ok(()) => Ok(()),

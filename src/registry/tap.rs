@@ -10,7 +10,7 @@ use tabled::{
 use walkdir::WalkDir;
 
 use super::db::{self, DEFAULT_TAP_NAME};
-use super::git::{git_clone, git_pull, tap_clone_path};
+use super::git::{git_clone, pull_or_reclone, tap_clone_path};
 use super::github::{
     discover_skills_from_repo, fetch_star_list_repos, is_gist_url, parse_github_url, parse_skill_md_content,
     parse_star_list_url,
@@ -35,7 +35,7 @@ pub struct TapRow {
 }
 
 /// Add a new tap from a GitHub URL
-pub fn add_tap(url: &str, install: bool) -> Result<()> {
+pub fn add_tap(url: &str, branch: Option<&str>, install: bool) -> Result<()> {
     let github_url = parse_github_url(url)?;
     let tap_name = github_url.tap_name();
 
@@ -71,8 +71,8 @@ pub fn add_tap(url: &str, install: bool) -> Result<()> {
         }
 
         println!("  {} Cloning repository...", "○".yellow());
-        git_clone(&base_url, &clone_dir, github_url.branch.as_deref())
-            .with_context(|| format!("Failed to clone {}", base_url))?;
+        let effective_branch = branch.or(github_url.branch.as_deref());
+        git_clone(&base_url, &clone_dir, effective_branch).with_context(|| format!("Failed to clone {}", base_url))?;
 
         println!("  {} Discovering skills...", "○".yellow());
         discover_skills_from_local(&clone_dir, &tap_name)
@@ -85,6 +85,7 @@ pub fn add_tap(url: &str, install: bool) -> Result<()> {
         updated_at: Some(Utc::now()),
         is_default: false,
         cached_registry: Some(registry.clone()),
+        branch: branch.map(|s| s.to_string()),
     };
 
     db::add_tap(&mut db, &tap_name, tap_info);
@@ -208,9 +209,17 @@ pub fn list_taps() -> Result<()> {
             .map(|registry| registry.skills.len());
         let skills_count = format_skills_count(installed_count, available_count);
 
+        let display_url = match &tap.branch {
+            Some(branch) => {
+                let annotated = format!("{} [{}]", tap.url, branch);
+                truncate_string(&annotated, TAP_URL_MAX_LEN)
+            }
+            None => truncate_string(&tap.url, TAP_URL_MAX_LEN),
+        };
+
         rows.push(TapRow {
             name: name.clone(),
-            url: truncate_string(&tap.url, TAP_URL_MAX_LEN),
+            url: display_url,
             skills_count,
             is_default: if tap.is_default { "✓" } else { "" },
         });
@@ -329,11 +338,11 @@ fn update_single_tap(db: &mut Database, name: &str, tap: &TapInfo) -> Result<Tap
             if let Some(parent) = clone_dir.parent() {
                 std::fs::create_dir_all(parent)?;
             }
-            let github_url = parse_github_url(&tap.url)?;
-            git_clone(&tap.url, &clone_dir, github_url.branch.as_deref())
+            git_clone(&tap.url, &clone_dir, tap.branch.as_deref())
                 .with_context(|| format!("Failed to clone {}", tap.url))?;
         } else {
-            git_pull(&clone_dir).with_context(|| format!("Failed to pull updates for {}", name))?;
+            pull_or_reclone(&clone_dir, &tap.url, tap.branch.as_deref())
+                .with_context(|| format!("Failed to pull updates for {}", name))?;
         }
 
         discover_skills_from_local(&clone_dir, name)?
@@ -502,7 +511,7 @@ pub fn import_star_list(url: &str, install: bool) -> Result<()> {
         }
 
         println!();
-        match add_tap(repo, install) {
+        match add_tap(repo, None, install) {
             Ok(()) => {
                 added += 1;
             }

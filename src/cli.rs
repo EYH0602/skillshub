@@ -96,6 +96,10 @@ pub enum TapCommands {
         /// Install all skills from the tap after adding
         #[arg(short, long)]
         install: bool,
+
+        /// Clone a specific branch instead of the default
+        #[arg(short, long)]
+        branch: Option<String>,
     },
 
     /// Remove a tap (uninstalls its skills by default)
