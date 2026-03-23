@@ -82,6 +82,9 @@ pub enum Commands {
         install: bool,
     },
 
+    /// Run diagnostic checks on your skillshub installation
+    Doctor,
+
     /// Migrate old-style installations to the new registry format
     Migrate,
 }

@@ -1,5 +1,6 @@
 mod agents;
 mod clean;
+pub mod doctor;
 mod external;
 mod link;
 

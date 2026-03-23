@@ -56,6 +56,9 @@ fn main() -> Result<()> {
             CleanCommands::All { confirm } => clean_all(confirm)?,
         },
         Commands::StarList { url, install } => import_star_list(&url, install)?,
+        Commands::Doctor => {
+            commands::doctor::run_doctor()?;
+        }
         Commands::Migrate => migrate_old_installations()?,
     }
 
