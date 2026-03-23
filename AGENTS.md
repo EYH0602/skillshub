@@ -34,6 +34,7 @@ cargo run -- link
 cargo run -- agents
 cargo run -- external list
 cargo run -- external scan
+cargo run -- doctor
 ```
 
 ### Planning
