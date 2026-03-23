@@ -114,6 +114,41 @@ mod tests {
     }
 
     #[test]
+    #[ignore] // Requires network access and git
+    fn test_git_clone_with_branch() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let dest = temp.path().join("repo");
+
+        // Clone the "test" branch
+        let result = git_clone("https://github.com/octocat/Hello-World.git", &dest, Some("test"));
+        assert!(result.is_ok(), "clone with branch failed: {:?}", result);
+        assert!(dest.join(".git").exists());
+
+        // Verify the checked-out branch is "test"
+        let output = std::process::Command::new("git")
+            .args(["rev-parse", "--abbrev-ref", "HEAD"])
+            .current_dir(&dest)
+            .output()
+            .expect("failed to run git rev-parse");
+        let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        assert_eq!(branch, "test", "expected branch 'test', got '{}'", branch);
+    }
+
+    #[test]
+    #[ignore] // Requires network access and git
+    fn test_git_clone_with_invalid_branch() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let dest = temp.path().join("repo");
+
+        let result = git_clone(
+            "https://github.com/octocat/Hello-World.git",
+            &dest,
+            Some("nonexistent-branch-xyz"),
+        );
+        assert!(result.is_err(), "clone with invalid branch should fail");
+    }
+
+    #[test]
     fn test_git_clone_invalid_dest_parent() {
         // Attempting to clone to a path with non-existent parent should fail
         let result = git_clone(

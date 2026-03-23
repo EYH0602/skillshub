@@ -782,9 +782,18 @@ fn extract_skill_paths(tree: &[TreeEntry]) -> Vec<String> {
 }
 
 /// Recursively copy directory contents
+///
+/// Symlinks are skipped as a defense-in-depth measure to prevent a malicious
+/// cloned repo from including symlinks that point outside the clone directory.
 pub(crate) fn copy_dir_contents(src: &Path, dst: &Path) -> Result<()> {
     for entry in fs::read_dir(src)? {
         let entry = entry?;
+
+        // Skip symlinks to avoid following links that escape the source tree
+        if entry.file_type()?.is_symlink() {
+            continue;
+        }
+
         let src_path = entry.path();
         let dst_path = dst.join(entry.file_name());
 
@@ -2330,5 +2339,104 @@ name: minimal-skill
         let registry = discover_skills_from_local(temp.path(), "test/tap").unwrap();
         assert_eq!(registry.skills.len(), 1);
         assert!(registry.skills.contains_key("my-skill"));
+    }
+
+    #[test]
+    fn test_walk_dir_for_skills_skips_malicious_frontmatter_name() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let skill_dir = temp.path().join("legit-dir");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+
+        // SKILL.md with a path-traversal name in the YAML frontmatter
+        let content = "---\nname: ../../../pwned\ndescription: malicious\n---\n# Evil Skill\n";
+        std::fs::write(skill_dir.join("SKILL.md"), content).unwrap();
+
+        let mut skills = HashMap::new();
+        walk_dir_for_skills(temp.path(), temp.path(), &mut skills).unwrap();
+
+        // The frontmatter name "../../../pwned" must be rejected.
+        // The fallback directory name "legit-dir" is safe, so it should be used instead.
+        assert!(
+            !skills.contains_key("../../../pwned"),
+            "path-traversal name from frontmatter must be rejected"
+        );
+        assert!(
+            skills.contains_key("legit-dir"),
+            "safe fallback directory name should be accepted"
+        );
+    }
+
+    #[test]
+    fn test_walk_dir_for_skills_skips_malicious_directory_name() {
+        let temp = tempfile::TempDir::new().unwrap();
+
+        // Use a name that contains ".." as a substring which is rejected by is_safe_skill_name.
+        let evil_dir = temp.path().join("..hidden");
+        std::fs::create_dir_all(&evil_dir).unwrap();
+
+        // SKILL.md with no valid frontmatter so the fallback (directory name) path is used
+        std::fs::write(evil_dir.join("SKILL.md"), "# No frontmatter").unwrap();
+
+        let mut skills = HashMap::new();
+        walk_dir_for_skills(temp.path(), temp.path(), &mut skills).unwrap();
+
+        // "..hidden" contains ".." and must be rejected by is_safe_skill_name
+        assert!(
+            !skills.contains_key("..hidden"),
+            "directory name containing '..' must be rejected"
+        );
+        assert!(
+            skills.is_empty(),
+            "no skills should be inserted for unsafe directory names"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_copy_dir_contents_skips_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::TempDir::new().unwrap();
+        let src = temp.path().join("src");
+        let dst = temp.path().join("dst");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(&dst).unwrap();
+
+        // Create a regular file
+        std::fs::write(src.join("real.txt"), "real content").unwrap();
+
+        // Create a subdirectory with a file
+        let subdir = src.join("subdir");
+        std::fs::create_dir_all(&subdir).unwrap();
+        std::fs::write(subdir.join("nested.txt"), "nested content").unwrap();
+
+        // Create a symlink to a file outside the source tree
+        let outside = temp.path().join("outside.txt");
+        std::fs::write(&outside, "outside content").unwrap();
+        symlink(&outside, src.join("link-to-file")).unwrap();
+
+        // Create a symlink to a directory outside the source tree
+        let outside_dir = temp.path().join("outside-dir");
+        std::fs::create_dir_all(&outside_dir).unwrap();
+        std::fs::write(outside_dir.join("secret.txt"), "secret").unwrap();
+        symlink(&outside_dir, src.join("link-to-dir")).unwrap();
+
+        // Run copy
+        copy_dir_contents(&src, &dst).unwrap();
+
+        // Regular file and subdirectory should be copied
+        assert!(dst.join("real.txt").exists(), "regular file should be copied");
+        assert_eq!(std::fs::read_to_string(dst.join("real.txt")).unwrap(), "real content");
+        assert!(
+            dst.join("subdir").join("nested.txt").exists(),
+            "nested file should be copied"
+        );
+
+        // Symlinks should NOT be copied
+        assert!(!dst.join("link-to-file").exists(), "symlink to file should be skipped");
+        assert!(
+            !dst.join("link-to-dir").exists(),
+            "symlink to directory should be skipped"
+        );
     }
 }
