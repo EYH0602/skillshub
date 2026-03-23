@@ -2,12 +2,23 @@
 name = "skillshub"
 version = "0.3.0"
 edition = "2021"
+rust-version = "1.70.0"
 description = "A package manager for AI coding agent skills - like homebrew for skills"
 authors = ["Yifeng He <yfhe.cs@gmail.com>"]
 license = "MIT"
 repository = "https://github.com/EYH0602/skillshub"
+readme = "README.md"
 keywords = ["ai", "skills", "cli", "coding-agents"]
 categories = ["command-line-utilities", "development-tools"]
+exclude = [
+  ".github/",
+  ".agents/",
+  ".claude/",
+  ".pre-commit-config.yaml",
+  "docs/plans/",
+  "plans/",
+  "setup.sh",
+]
 
 [[bin]]
 name = "skillshub"
