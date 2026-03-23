@@ -112,7 +112,7 @@ fn install_skill_internal(full_name: &str) -> Result<bool> {
         anyhow::bail!("Pinned commits are not supported for git-based taps.");
     } else {
         // Install from local tap clone (no API fallback)
-        let commit = install_from_clone(&skill_id.tap, &tap.url, &skill_entry.path, &dest)?;
+        let commit = install_from_clone(&skill_id.tap, &tap.url, &skill_entry.path, &dest, tap.branch.as_deref())?;
         println!("  {} Installed from local tap clone", "✓".green());
         commit
     };
@@ -370,9 +370,10 @@ fn install_from_clone(
     tap_url: &str,
     skill_path: &str,
     dest: &std::path::Path,
+    branch: Option<&str>,
 ) -> Result<Option<String>> {
     let clone_dir = crate::paths::get_tap_clone_dir(tap_name)?;
-    super::git::ensure_clone(&clone_dir, tap_url, None)?;
+    super::git::ensure_clone(&clone_dir, tap_url, branch)?;
 
     let source = clone_dir.join(skill_path);
 
@@ -597,7 +598,13 @@ pub fn update_skill(full_name: Option<&str>) -> Result<()> {
         }
 
         // Copy updated files from clone
-        match install_from_clone(&installed.tap, &tap.url, &skill_entry.path, &dest) {
+        match install_from_clone(
+            &installed.tap,
+            &tap.url,
+            &skill_entry.path,
+            &dest,
+            tap.branch.as_deref(),
+        ) {
             Ok(commit) => {
                 let old_commit = installed.commit.as_deref().unwrap_or("unknown");
                 if let Some(skill) = db.installed.get_mut(&skill_name) {
