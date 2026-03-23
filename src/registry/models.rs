@@ -182,18 +182,6 @@ impl GitHubUrl {
         format!("{}/repos/{}/{}", Self::github_api_base(), self.owner, self.repo)
     }
 
-    /// Get the tarball URL for downloading
-    #[allow(dead_code)] // Will be removed in github.rs cleanup (Task 12)
-    pub fn tarball_url(&self, git_ref: &str) -> String {
-        format!(
-            "{}/repos/{}/{}/tarball/{}",
-            Self::github_api_base(),
-            self.owner,
-            self.repo,
-            git_ref
-        )
-    }
-
     /// Get the raw content URL for a file, using the provided branch
     pub fn raw_url(&self, path: &str, branch: &str) -> String {
         format!(
@@ -324,10 +312,6 @@ mod tests {
         assert_eq!(url.tap_name(), "user/repo");
         assert_eq!(url.base_url(), "https://github.com/user/repo");
         assert_eq!(url.api_url(), "https://api.github.com/repos/user/repo");
-        assert_eq!(
-            url.tarball_url("main"),
-            "https://api.github.com/repos/user/repo/tarball/main"
-        );
         assert_eq!(
             url.raw_url("registry.json", "main"),
             "https://raw.githubusercontent.com/user/repo/main/registry.json"
