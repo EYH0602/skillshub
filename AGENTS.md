@@ -10,6 +10,7 @@ For architecture, CLI reference, supported agents, and skill/tap formats, see `d
 ## Development
 
 - Rust 2021 edition
+- `git` is a required runtime dependency (used for tap cloning and updates)
 - Always update `README.md` and `CLAUDE.md` when you introduce new features or libraries.
 - Always write unit tests for new features.
 - Always test your code after implementation.
@@ -28,12 +29,14 @@ cargo run -- list        # Run directly
 
 ```bash
 cargo run -- tap list
+cargo run -- tap add owner/repo --branch dev
 cargo run -- list
 cargo run -- install EYH0602/skillshub/code-reviewer
 cargo run -- link
 cargo run -- agents
 cargo run -- external list
 cargo run -- external scan
+cargo run -- doctor
 ```
 
 ### Planning

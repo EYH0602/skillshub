@@ -1,18 +1,21 @@
 use anyhow::{Context, Result};
 use chrono::Utc;
 use colored::Colorize;
+use std::collections::HashMap;
+use std::path::Path;
 use tabled::{
     settings::{Padding, Style},
     Table, Tabled,
 };
+use walkdir::WalkDir;
 
 use super::db::{self, DEFAULT_TAP_NAME};
-use super::git::{git_clone, git_pull, tap_clone_path};
+use super::git::{git_clone, pull_or_reclone, tap_clone_path};
 use super::github::{
-    discover_skills_from_local, discover_skills_from_repo, fetch_star_list_repos, is_gist_url, parse_github_url,
-    parse_star_list_url,
+    discover_skills_from_repo, fetch_star_list_repos, is_gist_url, is_safe_skill_name, parse_github_url,
+    parse_skill_md_content, parse_star_list_url,
 };
-use super::models::{Database, TapInfo, TapRegistry};
+use super::models::{Database, SkillEntry, TapInfo, TapRegistry};
 use crate::paths::get_taps_clone_dir;
 use crate::util::truncate_string;
 
@@ -32,7 +35,7 @@ pub struct TapRow {
 }
 
 /// Add a new tap from a GitHub URL
-pub fn add_tap(url: &str, install: bool) -> Result<()> {
+pub fn add_tap(url: &str, branch: Option<&str>, install: bool) -> Result<()> {
     let github_url = parse_github_url(url)?;
     let tap_name = github_url.tap_name();
 
@@ -49,6 +52,9 @@ pub fn add_tap(url: &str, install: bool) -> Result<()> {
 
     let base_url = github_url.base_url();
     println!("{} Adding tap '{}' from {}", "=>".green().bold(), tap_name, base_url);
+
+    // CLI --branch overrides URL-parsed branch; either is persisted in TapInfo
+    let effective_branch = branch.or(github_url.branch.as_deref());
 
     // For gist URLs, use the API-based discovery (no local clone)
     let registry = if is_gist_url(url) {
@@ -68,8 +74,7 @@ pub fn add_tap(url: &str, install: bool) -> Result<()> {
         }
 
         println!("  {} Cloning repository...", "○".yellow());
-        git_clone(&base_url, &clone_dir, github_url.branch.as_deref())
-            .with_context(|| format!("Failed to clone {}", base_url))?;
+        git_clone(&base_url, &clone_dir, effective_branch).with_context(|| format!("Failed to clone {}", base_url))?;
 
         println!("  {} Discovering skills...", "○".yellow());
         discover_skills_from_local(&clone_dir, &tap_name)
@@ -82,6 +87,7 @@ pub fn add_tap(url: &str, install: bool) -> Result<()> {
         updated_at: Some(Utc::now()),
         is_default: false,
         cached_registry: Some(registry.clone()),
+        branch: effective_branch.map(|s| s.to_string()),
     };
 
     db::add_tap(&mut db, &tap_name, tap_info);
@@ -205,9 +211,17 @@ pub fn list_taps() -> Result<()> {
             .map(|registry| registry.skills.len());
         let skills_count = format_skills_count(installed_count, available_count);
 
+        let display_url = match &tap.branch {
+            Some(branch) => {
+                let annotated = format!("{} [{}]", tap.url, branch);
+                truncate_string(&annotated, TAP_URL_MAX_LEN)
+            }
+            None => truncate_string(&tap.url, TAP_URL_MAX_LEN),
+        };
+
         rows.push(TapRow {
             name: name.clone(),
-            url: truncate_string(&tap.url, TAP_URL_MAX_LEN),
+            url: display_url,
             skills_count,
             is_default: if tap.is_default { "✓" } else { "" },
         });
@@ -326,11 +340,11 @@ fn update_single_tap(db: &mut Database, name: &str, tap: &TapInfo) -> Result<Tap
             if let Some(parent) = clone_dir.parent() {
                 std::fs::create_dir_all(parent)?;
             }
-            let github_url = parse_github_url(&tap.url)?;
-            git_clone(&tap.url, &clone_dir, github_url.branch.as_deref())
+            git_clone(&tap.url, &clone_dir, tap.branch.as_deref())
                 .with_context(|| format!("Failed to clone {}", tap.url))?;
         } else {
-            git_pull(&clone_dir).with_context(|| format!("Failed to pull updates for {}", name))?;
+            pull_or_reclone(&clone_dir, &tap.url, tap.branch.as_deref())
+                .with_context(|| format!("Failed to pull updates for {}", name))?;
         }
 
         discover_skills_from_local(&clone_dir, name)?
@@ -499,7 +513,7 @@ pub fn import_star_list(url: &str, install: bool) -> Result<()> {
         }
 
         println!();
-        match add_tap(repo, install) {
+        match add_tap(repo, None, install) {
             Ok(()) => {
                 added += 1;
             }
@@ -520,6 +534,100 @@ pub fn import_star_list(url: &str, install: bool) -> Result<()> {
     );
 
     Ok(())
+}
+
+/// Discover skills by walking a local clone directory for SKILL.md files.
+pub(crate) fn discover_skills_from_local(clone_dir: &Path, tap_name: &str) -> Result<TapRegistry> {
+    let mut skills = HashMap::new();
+    let skip_dirs = [
+        ".git",
+        "node_modules",
+        "target",
+        "test",
+        "tests",
+        "examples",
+        "fixtures",
+        "vendor",
+        "benchmark",
+    ];
+
+    for entry in WalkDir::new(clone_dir)
+        .into_iter()
+        .filter_entry(|e| {
+            // Never skip the root directory itself (depth 0)
+            if e.depth() == 0 {
+                return true;
+            }
+            let name = e.file_name().to_string_lossy();
+            !(e.file_type().is_dir() && (name.starts_with('.') || skip_dirs.contains(&name.as_ref())))
+        })
+        .filter_map(|e| e.ok())
+    {
+        if entry.file_name() == "SKILL.md" && entry.file_type().is_file() {
+            if let Ok(content) = std::fs::read_to_string(entry.path()) {
+                match parse_skill_md_content(&content) {
+                    Some((name, description)) => {
+                        // Reject names with path traversal sequences
+                        if !is_safe_skill_name(&name) {
+                            let rel_path = entry.path().strip_prefix(clone_dir).unwrap_or(entry.path());
+                            eprintln!(
+                                "  {} Skipping {}: unsafe skill name '{}'",
+                                "!".yellow(),
+                                rel_path.display(),
+                                name
+                            );
+                            continue;
+                        }
+
+                        let skill_path = entry
+                            .path()
+                            .parent()
+                            .and_then(|p| p.strip_prefix(clone_dir).ok())
+                            .map(|p| p.to_string_lossy().to_string())
+                            .unwrap_or_default();
+
+                        // Warn on duplicate skill names
+                        if skills.contains_key(&name) {
+                            eprintln!(
+                                "  {} Duplicate skill name '{}' at {}, keeping first occurrence",
+                                "!".yellow(),
+                                name,
+                                skill_path
+                            );
+                        } else {
+                            skills.insert(
+                                name.clone(),
+                                SkillEntry {
+                                    path: skill_path,
+                                    description,
+                                    homepage: None,
+                                },
+                            );
+                        }
+                    }
+                    None => {
+                        // Warn about malformed SKILL.md
+                        let rel_path = entry.path().strip_prefix(clone_dir).unwrap_or(entry.path());
+                        eprintln!(
+                            "  {} Skipping {}: invalid frontmatter (missing name field)",
+                            "!".yellow(),
+                            rel_path.display()
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    if skills.is_empty() {
+        anyhow::bail!("No skills found in local clone (no valid SKILL.md files detected)");
+    }
+
+    Ok(TapRegistry {
+        name: tap_name.to_string(),
+        description: Some(format!("Skills from {}", tap_name)),
+        skills,
+    })
 }
 
 #[cfg(test)]
@@ -1043,5 +1151,291 @@ mod tests {
         let _guard = TestHomeGuard::set(&home);
         let result = remove_tap("legacy-user/legacy-repo", false);
         assert!(result.is_ok(), "remove_tap should succeed even without clone dir");
+    }
+
+    #[test]
+    fn test_discover_finds_skills_in_subdirs() {
+        let temp = tempfile::TempDir::new().unwrap();
+
+        // Create skill directories with SKILL.md files in nested subdirs
+        let skill_a = temp.path().join("skills").join("skill-a");
+        let skill_b = temp.path().join("other").join("nested").join("skill-b");
+        std::fs::create_dir_all(&skill_a).unwrap();
+        std::fs::create_dir_all(&skill_b).unwrap();
+
+        std::fs::write(
+            skill_a.join("SKILL.md"),
+            "---\nname: skill-a\ndescription: First skill\n---\nContent",
+        )
+        .unwrap();
+        std::fs::write(
+            skill_b.join("SKILL.md"),
+            "---\nname: skill-b\ndescription: Second skill\n---\nContent",
+        )
+        .unwrap();
+
+        let registry = discover_skills_from_local(temp.path(), "test/tap").unwrap();
+        assert_eq!(registry.skills.len(), 2);
+        assert!(registry.skills.contains_key("skill-a"));
+        assert!(registry.skills.contains_key("skill-b"));
+
+        // Verify paths are relative
+        let entry_a = registry.skills.get("skill-a").unwrap();
+        assert_eq!(entry_a.path, "skills/skill-a");
+        assert_eq!(entry_a.description, Some("First skill".to_string()));
+
+        let entry_b = registry.skills.get("skill-b").unwrap();
+        assert_eq!(entry_b.path, "other/nested/skill-b");
+    }
+
+    #[test]
+    fn test_discover_finds_root_level_skill() {
+        let temp = tempfile::TempDir::new().unwrap();
+
+        // Place SKILL.md directly in the root of the clone
+        std::fs::write(
+            temp.path().join("SKILL.md"),
+            "---\nname: root-skill\ndescription: A root level skill\n---\nContent",
+        )
+        .unwrap();
+
+        let registry = discover_skills_from_local(temp.path(), "test/tap").unwrap();
+        assert_eq!(registry.skills.len(), 1);
+        assert!(registry.skills.contains_key("root-skill"));
+
+        let entry = registry.skills.get("root-skill").unwrap();
+        // Root-level skill should have empty path (no subdirectory)
+        assert_eq!(entry.path, "");
+        assert_eq!(entry.description, Some("A root level skill".to_string()));
+    }
+
+    #[test]
+    fn test_discover_skips_git_dir() {
+        let temp = tempfile::TempDir::new().unwrap();
+
+        // Create a .git directory with a fake SKILL.md (should be skipped)
+        let git_dir = temp.path().join(".git").join("hooks");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        std::fs::write(
+            temp.path().join(".git").join("SKILL.md"),
+            "---\nname: should-be-skipped\n---\nContent",
+        )
+        .unwrap();
+
+        // Create a real skill
+        let skill_dir = temp.path().join("skills").join("real-skill");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: real-skill\ndescription: A real skill\n---\nContent",
+        )
+        .unwrap();
+
+        let registry = discover_skills_from_local(temp.path(), "test/tap").unwrap();
+        assert_eq!(registry.skills.len(), 1);
+        assert!(registry.skills.contains_key("real-skill"));
+        assert!(!registry.skills.contains_key("should-be-skipped"));
+    }
+
+    #[test]
+    fn test_discover_skips_test_fixtures_dirs() {
+        let temp = tempfile::TempDir::new().unwrap();
+
+        // Create SKILL.md files in directories that should be skipped
+        for dir_name in &[
+            "test",
+            "tests",
+            "fixtures",
+            "node_modules",
+            "target",
+            "vendor",
+            "examples",
+            "benchmark",
+        ] {
+            let dir = temp.path().join(dir_name).join("some-skill");
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join("SKILL.md"),
+                format!("---\nname: skip-{}\ndescription: Should be skipped\n---\n", dir_name),
+            )
+            .unwrap();
+        }
+
+        // Also test a dot-prefixed hidden dir (e.g., .cache)
+        let hidden_dir = temp.path().join(".cache").join("cached-skill");
+        std::fs::create_dir_all(&hidden_dir).unwrap();
+        std::fs::write(
+            hidden_dir.join("SKILL.md"),
+            "---\nname: skip-hidden\ndescription: Should be skipped\n---\n",
+        )
+        .unwrap();
+
+        // Create a real skill that should be found
+        let real_skill = temp.path().join("skills").join("real-skill");
+        std::fs::create_dir_all(&real_skill).unwrap();
+        std::fs::write(
+            real_skill.join("SKILL.md"),
+            "---\nname: real-skill\ndescription: Should be found\n---\n",
+        )
+        .unwrap();
+
+        let registry = discover_skills_from_local(temp.path(), "test/tap").unwrap();
+        assert_eq!(registry.skills.len(), 1, "Only the real skill should be found");
+        assert!(registry.skills.contains_key("real-skill"));
+
+        // None of the skipped directory skills should appear
+        for dir_name in &[
+            "test",
+            "tests",
+            "fixtures",
+            "node_modules",
+            "target",
+            "vendor",
+            "examples",
+            "benchmark",
+        ] {
+            assert!(
+                !registry.skills.contains_key(&format!("skip-{}", dir_name)),
+                "Skill from {} dir should be skipped",
+                dir_name
+            );
+        }
+        assert!(!registry.skills.contains_key("skip-hidden"));
+    }
+
+    #[test]
+    fn test_discover_warns_malformed_skill_md() {
+        let temp = tempfile::TempDir::new().unwrap();
+
+        // Create a SKILL.md without valid frontmatter
+        let bad_skill = temp.path().join("bad-skill");
+        std::fs::create_dir_all(&bad_skill).unwrap();
+        std::fs::write(bad_skill.join("SKILL.md"), "# No frontmatter here").unwrap();
+
+        // Create a valid skill so discovery doesn't bail with "no skills found"
+        let good_skill = temp.path().join("good-skill");
+        std::fs::create_dir_all(&good_skill).unwrap();
+        std::fs::write(
+            good_skill.join("SKILL.md"),
+            "---\nname: good-skill\ndescription: Valid skill\n---\nContent",
+        )
+        .unwrap();
+
+        let registry = discover_skills_from_local(temp.path(), "test/tap").unwrap();
+
+        // Only the valid skill should be present (malformed one is skipped with a warning)
+        assert_eq!(registry.skills.len(), 1);
+        assert!(registry.skills.contains_key("good-skill"));
+        assert!(!registry.skills.contains_key("bad-skill"));
+    }
+
+    #[test]
+    fn test_discover_warns_duplicate_names() {
+        let temp = tempfile::TempDir::new().unwrap();
+
+        // Create two SKILL.md files with the same name
+        let skill_a = temp.path().join("dir-a");
+        let skill_b = temp.path().join("dir-b");
+        std::fs::create_dir_all(&skill_a).unwrap();
+        std::fs::create_dir_all(&skill_b).unwrap();
+
+        std::fs::write(
+            skill_a.join("SKILL.md"),
+            "---\nname: duplicate-name\ndescription: First occurrence\n---\nContent",
+        )
+        .unwrap();
+        std::fs::write(
+            skill_b.join("SKILL.md"),
+            "---\nname: duplicate-name\ndescription: Second occurrence\n---\nContent",
+        )
+        .unwrap();
+
+        let registry = discover_skills_from_local(temp.path(), "test/tap").unwrap();
+
+        // Only one entry should exist (the first occurrence wins)
+        assert_eq!(registry.skills.len(), 1);
+        assert!(registry.skills.contains_key("duplicate-name"));
+    }
+
+    #[test]
+    fn test_discover_empty_repo_bails() {
+        let temp = tempfile::TempDir::new().unwrap();
+
+        // No SKILL.md files at all
+        std::fs::create_dir_all(temp.path().join("src")).unwrap();
+        std::fs::write(temp.path().join("README.md"), "# Empty repo").unwrap();
+
+        let result = discover_skills_from_local(temp.path(), "test/tap");
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().to_string().contains("No skills found"),
+            "Error should mention no skills found"
+        );
+    }
+
+    #[test]
+    fn test_discover_skips_malicious_frontmatter_name() {
+        let temp = tempfile::TempDir::new().unwrap();
+
+        // Skill with path-traversal name in frontmatter
+        let malicious_dir = temp.path().join("evil-skill");
+        std::fs::create_dir_all(&malicious_dir).unwrap();
+        std::fs::write(
+            malicious_dir.join("SKILL.md"),
+            "---\nname: ../../../pwned\ndescription: Malicious skill\n---\nEvil content",
+        )
+        .unwrap();
+
+        // Also add a legitimate skill so the registry isn't empty
+        let good_dir = temp.path().join("good-skill");
+        std::fs::create_dir_all(&good_dir).unwrap();
+        std::fs::write(
+            good_dir.join("SKILL.md"),
+            "---\nname: good-skill\ndescription: Legit skill\n---\nGood content",
+        )
+        .unwrap();
+
+        let registry = discover_skills_from_local(temp.path(), "test/tap").unwrap();
+        assert!(
+            !registry.skills.contains_key("../../../pwned"),
+            "Malicious frontmatter name should be rejected"
+        );
+        assert!(
+            registry.skills.contains_key("good-skill"),
+            "Legitimate skill should still be discovered"
+        );
+    }
+
+    #[test]
+    fn test_discover_skips_malicious_directory_traversal_name() {
+        let temp = tempfile::TempDir::new().unwrap();
+
+        // Skills with various unsafe names
+        for name in &["../escape", "foo/bar", "foo\\bar", "..", "."] {
+            let dir = temp.path().join("skills").join(name.replace(['/', '\\'], "_"));
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join("SKILL.md"),
+                format!("---\nname: {}\ndescription: Bad\n---\nContent", name),
+            )
+            .unwrap();
+        }
+
+        // Add a good skill
+        let good_dir = temp.path().join("skills").join("legit");
+        std::fs::create_dir_all(&good_dir).unwrap();
+        std::fs::write(
+            good_dir.join("SKILL.md"),
+            "---\nname: legit\ndescription: Good skill\n---\nContent",
+        )
+        .unwrap();
+
+        let registry = discover_skills_from_local(temp.path(), "test/tap").unwrap();
+        assert_eq!(
+            registry.skills.len(),
+            1,
+            "Only the safe skill should be in the registry"
+        );
+        assert!(registry.skills.contains_key("legit"));
     }
 }

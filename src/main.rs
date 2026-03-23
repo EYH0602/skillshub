@@ -39,7 +39,7 @@ fn main() -> Result<()> {
         Commands::Link => link_to_agents()?,
         Commands::Agents => show_agents()?,
         Commands::Tap(tap_cmd) => match tap_cmd {
-            TapCommands::Add { url, install } => add_tap(&url, install)?,
+            TapCommands::Add { url, install, branch } => add_tap(&url, branch.as_deref(), install)?,
             TapCommands::Remove { name, keep_skills } => remove_tap(&name, keep_skills)?,
             TapCommands::List => list_taps()?,
             TapCommands::Update { name } => update_tap(name.as_deref())?,
@@ -56,6 +56,9 @@ fn main() -> Result<()> {
             CleanCommands::All { confirm } => clean_all(confirm)?,
         },
         Commands::StarList { url, install } => import_star_list(&url, install)?,
+        Commands::Doctor => {
+            commands::doctor::run_doctor()?;
+        }
         Commands::Migrate => migrate_old_installations()?,
     }
 

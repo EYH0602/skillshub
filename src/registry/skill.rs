@@ -7,17 +7,14 @@ use tabled::{
 };
 
 use super::db::{self, DEFAULT_TAP_NAME};
-use super::git::{git_head_sha, git_pull, tap_clone_path};
-use super::github::{
-    copy_dir_contents, discover_skills_from_gist, download_skill, fetch_gist, get_default_branch, get_latest_commit,
-    is_gist_url, parse_gist_url, parse_github_url,
-};
+use super::git::{ensure_clone, git_head_sha, tap_clone_path};
+use super::github::{discover_skills_from_gist, fetch_gist, is_gist_url, parse_gist_url, parse_github_url};
 use super::models::{InstalledSkill, SkillId};
 use super::tap::get_tap_registry;
 use crate::commands::link_to_agents;
-use crate::paths::{get_embedded_skills_dir, get_skills_install_dir, get_taps_clone_dir};
+use crate::paths::{get_embedded_skills_dir, get_skills_install_dir, get_tap_clone_dir, get_taps_clone_dir};
 use crate::skill::{discover_skills, parse_skill_metadata};
-use crate::util::truncate_string;
+use crate::util::{copy_dir_contents, truncate_string};
 
 const DESCRIPTION_MAX_LEN: usize = 50;
 
@@ -99,8 +96,7 @@ fn install_skill_internal(full_name: &str) -> Result<bool> {
     let dest = install_dir.join(&skill_id.tap).join(&skill_id.skill);
     std::fs::create_dir_all(&dest)?;
 
-    // For the default (bundled) tap, try to copy from local skills directory first.
-    // Only fall back to network download if the local path is not available.
+    // For the default (bundled) tap, install from local bundled skills directory.
     let commit = if tap.is_default || skill_id.tap == DEFAULT_TAP_NAME {
         if requested_commit.is_some() {
             println!(
@@ -108,37 +104,17 @@ fn install_skill_internal(full_name: &str) -> Result<bool> {
                 "!".yellow()
             );
         }
-        match install_from_local(&skill_id.skill, &dest) {
-            Ok(()) => {
-                println!("  {} Installed from bundled skills (no network required)", "✓".green());
-                None // local install has no remote commit SHA
-            }
-            Err(e) => {
-                println!(
-                    "  {} Local bundled skill not found ({}), falling back to network download",
-                    "!".yellow(),
-                    e
-                );
-                let (commit, _) = install_from_remote(&tap.url, &skill_entry.path, &dest, requested_commit.as_deref())?;
-                commit
-            }
-        }
-    } else if requested_commit.is_some() {
-        // Pinned @commit requested — must use API to fetch the exact revision
-        let (commit, _) = install_from_remote(&tap.url, &skill_entry.path, &dest, requested_commit.as_deref())?;
-        commit
+        install_from_local(&skill_id.skill, &dest)?;
+        println!("  {} Installed from bundled skills (no network required)", "✓".green());
+        None // local install has no remote commit SHA
+    } else if requested_commit.is_some() && !is_gist_url(&tap.url) {
+        // Pinned @commit is not supported for git-based taps
+        anyhow::bail!("Pinned commits are not supported for git-based taps.");
     } else {
-        // Try local clone first, fall back to remote download
-        match install_from_clone(&skill_id.tap, &skill_entry.path, &dest) {
-            Ok(commit) => {
-                println!("  {} Installed from local tap clone", "✓".green());
-                commit
-            }
-            Err(_) => {
-                let (commit, _) = install_from_remote(&tap.url, &skill_entry.path, &dest, None)?;
-                commit
-            }
-        }
+        // Install from local tap clone (no API fallback)
+        let commit = install_from_clone(&skill_id.tap, &tap.url, &skill_entry.path, &dest, tap.branch.as_deref())?;
+        println!("  {} Installed from local tap clone", "✓".green());
+        commit
     };
 
     // Record in database
@@ -210,30 +186,50 @@ pub fn add_skill_from_url(url: &str) -> Result<()> {
         return Ok(());
     }
 
+    // Reject pinned commit SHAs for non-gist taps — git clone -b cannot checkout a SHA
+    if github_url.is_commit_sha() {
+        anyhow::bail!(
+            "Pinned commits (@SHA) are not supported for git-based taps. \
+             Use --branch with a branch or tag name instead."
+        );
+    }
+
     println!("{} Adding '{}' from {}", "=>".green().bold(), full_name, url);
 
-    // Determine commit to use (if branch looks like a commit SHA, use it as the commit)
-    let commit = if github_url.is_commit_sha() {
-        github_url.branch.clone()
-    } else {
-        None
-    };
+    // Ensure tap clone exists
+    let base_url = github_url.base_url();
+    let clone_dir = get_tap_clone_dir(&tap_name)?;
+    ensure_clone(&clone_dir, &base_url, github_url.branch.as_deref())?;
 
     let dest = install_dir.join(&tap_name).join(&skill_name);
     std::fs::create_dir_all(&dest)?;
 
-    // Download the skill
-    let commit_sha = download_skill(&github_url, skill_path, &dest, commit.as_deref())?;
+    // Copy from clone with path containment check
+    let source = clone_dir.join(skill_path);
+    let canonical_source = source
+        .canonicalize()
+        .with_context(|| format!("Skill path '{}' not found in repository", skill_path))?;
+    let canonical_clone = clone_dir.canonicalize()?;
+    if !canonical_source.starts_with(&canonical_clone) {
+        anyhow::bail!("Skill path escapes clone directory");
+    }
+    if !canonical_source.join("SKILL.md").exists() {
+        anyhow::bail!("No SKILL.md found at '{}'", skill_path);
+    }
+    copy_dir_contents(&source, &dest)?;
 
-    // Add tap if it doesn't exist
+    let commit_sha = super::git::git_head_sha(&clone_dir)?;
+
+    // Populate cached_registry so `update` works without manual `tap update`
     if db::get_tap(&db, &tap_name).is_none() {
-        let tap_url = format!("https://github.com/{}/{}", github_url.owner, github_url.repo);
+        let registry = super::tap::discover_skills_from_local(&clone_dir, &tap_name).ok(); // Non-fatal: registry cache is a convenience
         let tap_info = super::models::TapInfo {
-            url: tap_url,
+            url: base_url,
             skills_path: "skills".to_string(),
             updated_at: Some(Utc::now()),
             is_default: false,
-            cached_registry: None, // Cache will be populated on next tap update
+            cached_registry: registry,
+            branch: github_url.branch.clone(),
         };
         db::add_tap(&mut db, &tap_name, tap_info);
     }
@@ -297,6 +293,7 @@ pub fn add_skill_from_gist(url: &str) -> Result<()> {
             updated_at: Some(Utc::now()),
             is_default: false,
             cached_registry: None,
+            branch: None,
         };
         db::add_tap(&mut db, &tap_name, tap_info);
     }
@@ -372,51 +369,46 @@ fn install_from_local(skill_name: &str, dest: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-/// Install from remote tap
-fn install_from_remote(
+/// Install a skill by copying from a local tap clone.
+/// Ensures the clone exists (cloning if necessary), validates path containment,
+/// and copies with cleanup on failure.
+/// Returns the HEAD commit SHA of the clone.
+fn install_from_clone(
+    tap_name: &str,
     tap_url: &str,
     skill_path: &str,
     dest: &std::path::Path,
-    commit: Option<&str>,
-) -> Result<(Option<String>, bool)> {
-    let github_url = parse_github_url(tap_url)?;
-
-    // Remove dest if it exists (reinstall)
-    if dest.exists() {
-        std::fs::remove_dir_all(dest)?;
-    }
-
-    let commit_sha = download_skill(&github_url, skill_path, dest, commit)?;
-
-    Ok((Some(commit_sha), false))
-}
-
-/// Install a skill by copying from a local tap clone.
-/// Returns the HEAD commit SHA of the clone.
-fn install_from_clone(tap_name: &str, skill_path: &str, dest: &std::path::Path) -> Result<Option<String>> {
-    let taps_dir = get_taps_clone_dir()?;
-    let clone_dir = tap_clone_path(&taps_dir, tap_name);
-
-    if !clone_dir.exists() {
-        anyhow::bail!("No local clone for tap '{}'", tap_name);
-    }
+    branch: Option<&str>,
+) -> Result<Option<String>> {
+    let clone_dir = crate::paths::get_tap_clone_dir(tap_name)?;
+    super::git::ensure_clone(&clone_dir, tap_url, branch)?;
 
     let source = clone_dir.join(skill_path);
-    if !source.exists() {
-        anyhow::bail!("Skill path '{}' not found in local clone", skill_path);
+
+    // Path containment check
+    let canonical_source = source
+        .canonicalize()
+        .with_context(|| format!("Skill path '{}' not found in local clone", skill_path))?;
+    let canonical_clone = clone_dir.canonicalize()?;
+    if !canonical_source.starts_with(&canonical_clone) {
+        anyhow::bail!("Skill path escapes clone directory");
     }
-    if !source.join("SKILL.md").exists() {
+    if !canonical_source.join("SKILL.md").exists() {
         anyhow::bail!("No SKILL.md found in '{}'", skill_path);
     }
 
-    // Clean destination and copy
+    // Clean destination and copy with cleanup on failure
     if dest.exists() {
         std::fs::remove_dir_all(dest)?;
     }
     std::fs::create_dir_all(dest)?;
-    copy_dir_contents(&source, dest)?;
+    if let Err(e) = copy_dir_contents(&source, dest) {
+        // Clean up partial copy before propagating error
+        let _ = std::fs::remove_dir_all(dest);
+        return Err(e.context("Failed to copy skill from clone"));
+    }
 
-    let commit = git_head_sha(&clone_dir).ok();
+    let commit = super::git::git_head_sha(&clone_dir).ok();
     Ok(commit)
 }
 
@@ -580,93 +572,54 @@ pub fn update_skill(full_name: Option<&str>) -> Result<()> {
             continue;
         }
 
-        // Try update from local clone for non-gist, non-default taps
-        let taps_dir = get_taps_clone_dir()?;
-        let clone_dir = tap_clone_path(&taps_dir, &installed.tap);
-
-        if !is_gist_url(&tap.url) && clone_dir.exists() {
-            // Pull latest
-            if let Err(e) = git_pull(&clone_dir) {
-                println!("  {} {} (pull failed: {})", "✗".red(), skill_name, e);
-                continue;
-            }
-
-            let new_commit = git_head_sha(&clone_dir).unwrap_or_default();
-
-            if installed.commit.as_deref() == Some(&new_commit) {
-                println!("  {} {} (up to date)", "✓".green(), skill_name);
-                continue;
-            }
-
-            // Copy updated files from clone
-            match install_from_clone(&installed.tap, &skill_entry.path, &dest) {
-                Ok(commit) => {
-                    let old_commit = installed.commit.as_deref().unwrap_or("unknown");
-                    if let Some(skill) = db.installed.get_mut(&skill_name) {
-                        skill.commit = commit;
-                        skill.installed_at = Utc::now();
-                    }
-                    println!("  {} {} ({} -> {})", "✓".green(), skill_name, old_commit, new_commit);
-                    updated_count += 1;
-                }
-                Err(e) => {
-                    println!("  {} {} ({})", "✗".red(), skill_name, e);
-                }
-            }
+        // Update from local clone for non-gist, non-default taps
+        if is_gist_url(&tap.url) {
+            // Gist taps without gist_updated_at shouldn't reach here, but guard anyway
+            println!("  {} {} (unexpected state for gist skill)", "✗".red(), skill_name);
             continue;
         }
 
-        // Fallback: existing API-based update for taps without local clones
-        let github_url = match parse_github_url(&tap.url) {
-            Ok(u) => u,
-            Err(e) => {
-                println!("  {} {} ({})", "✗".red(), skill_name, e);
-                continue;
-            }
-        };
+        let taps_dir = get_taps_clone_dir()?;
+        let clone_dir = tap_clone_path(&taps_dir, &installed.tap);
 
-        // Resolve branch for the tap
-        let resolved_branch = match &github_url.branch {
-            Some(b) => b.clone(),
-            None => match get_default_branch(&github_url.owner, &github_url.repo) {
-                Ok(b) => b,
-                Err(e) => {
-                    println!("  {} {} ({})", "✗".red(), skill_name, e);
-                    continue;
-                }
-            },
-        };
+        if !clone_dir.exists() {
+            println!(
+                "  {} {} (No local clone for tap '{}'. Run 'skillshub tap update' to create one.)",
+                "✗".red(),
+                skill_name,
+                installed.tap
+            );
+            continue;
+        }
 
-        let latest_commit = match get_latest_commit(&github_url, Some(&skill_entry.path), &resolved_branch) {
-            Ok(c) => c,
-            Err(e) => {
-                println!("  {} {} ({})", "✗".red(), skill_name, e);
-                continue;
-            }
-        };
+        // Pull latest using resilient pull_or_reclone
+        if let Err(e) = super::git::pull_or_reclone(&clone_dir, &tap.url, tap.branch.as_deref()) {
+            println!("  {} {} (pull failed: {})", "✗".red(), skill_name, e);
+            continue;
+        }
 
-        // Check if update needed
-        if installed.commit.as_deref() == Some(&latest_commit) {
+        let new_commit = git_head_sha(&clone_dir).unwrap_or_default();
+
+        if installed.commit.as_deref() == Some(&new_commit) {
             println!("  {} {} (up to date)", "✓".green(), skill_name);
             continue;
         }
 
-        // Perform update via network
-        match install_from_remote(&tap.url, &skill_entry.path, &dest, Some(&latest_commit)) {
-            Ok((new_commit, _)) => {
-                // Update database
+        // Copy updated files from clone
+        match install_from_clone(
+            &installed.tap,
+            &tap.url,
+            &skill_entry.path,
+            &dest,
+            tap.branch.as_deref(),
+        ) {
+            Ok(commit) => {
+                let old_commit = installed.commit.as_deref().unwrap_or("unknown");
                 if let Some(skill) = db.installed.get_mut(&skill_name) {
-                    skill.commit = new_commit;
+                    skill.commit = commit;
                     skill.installed_at = Utc::now();
                 }
-
-                println!(
-                    "  {} {} ({} -> {})",
-                    "✓".green(),
-                    skill_name,
-                    installed.commit.as_deref().unwrap_or("unknown"),
-                    latest_commit
-                );
+                println!("  {} {} ({} -> {})", "✓".green(), skill_name, old_commit, new_commit);
                 updated_count += 1;
             }
             Err(e) => {
@@ -1128,6 +1081,7 @@ mod tests {
                 updated_at: None,
                 is_default: false,
                 cached_registry: None,
+                branch: None,
             },
         );
 

@@ -1,13 +1,13 @@
 //! Mock GitHub API server for integration tests
 //!
 //! Uses wiremock to provide a fake GitHub API that can return
-//! controlled responses for skill discovery and download operations.
+//! controlled responses for gist, star-list, and error-handling tests.
 
 #![allow(dead_code)]
 
 use chrono::Utc;
 use serde_json::json;
-use wiremock::matchers::{method, path, path_regex};
+use wiremock::matchers::{method, path_regex};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 /// Mock GitHub API server
@@ -25,76 +25,6 @@ impl MockGitHub {
     /// Get the server URL for configuring test environment
     pub fn url(&self) -> String {
         self.server.uri()
-    }
-
-    /// Mock the tree API for skill discovery
-    ///
-    /// This simulates the GitHub Tree API response used to discover skills
-    /// by scanning for SKILL.md files. When a skill path is empty (""),
-    /// the SKILL.md is at the repository root.
-    pub async fn mock_tree_response(&self, owner: &str, repo: &str, skills: &[(&str, &str)]) {
-        let tree_entries: Vec<_> = skills
-            .iter()
-            .map(|(path, _)| {
-                let skill_md_path = if path.is_empty() {
-                    "SKILL.md".to_string()
-                } else {
-                    format!("{}/SKILL.md", path)
-                };
-                json!({
-                    "path": skill_md_path,
-                    "type": "blob"
-                })
-            })
-            .collect();
-
-        let body = json!({
-            "tree": tree_entries
-        });
-
-        Mock::given(method("GET"))
-            .and(path_regex(format!(r"/repos/{}/{}/git/trees/.*", owner, repo)))
-            .respond_with(ResponseTemplate::new(200).set_body_json(body))
-            .mount(&self.server)
-            .await;
-    }
-
-    /// Mock raw file content (SKILL.md)
-    ///
-    /// When skill_path is empty, the SKILL.md is at the repository root.
-    pub async fn mock_skill_md(&self, owner: &str, repo: &str, branch: &str, skill_path: &str, content: &str) {
-        let url_path = if skill_path.is_empty() {
-            format!("/{}/{}/{}/SKILL.md", owner, repo, branch)
-        } else {
-            format!("/{}/{}/{}/{}/SKILL.md", owner, repo, branch, skill_path)
-        };
-        Mock::given(method("GET"))
-            .and(path(url_path))
-            .respond_with(ResponseTemplate::new(200).set_body_string(content))
-            .mount(&self.server)
-            .await;
-    }
-
-    /// Mock the commits API for getting latest commit SHA
-    pub async fn mock_commits(&self, owner: &str, repo: &str, commit_sha: &str) {
-        let body = json!([{
-            "sha": commit_sha
-        }]);
-
-        Mock::given(method("GET"))
-            .and(path_regex(format!(r"/repos/{}/{}/commits.*", owner, repo)))
-            .respond_with(ResponseTemplate::new(200).set_body_json(body))
-            .mount(&self.server)
-            .await;
-    }
-
-    /// Mock tarball download
-    pub async fn mock_tarball(&self, owner: &str, repo: &str, tarball_bytes: Vec<u8>) {
-        Mock::given(method("GET"))
-            .and(path_regex(format!(r"/repos/{}/{}/tarball/.*", owner, repo)))
-            .respond_with(ResponseTemplate::new(200).set_body_bytes(tarball_bytes))
-            .mount(&self.server)
-            .await;
     }
 
     /// Mock a 404 response for non-existent resources

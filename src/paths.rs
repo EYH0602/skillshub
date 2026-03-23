@@ -25,6 +25,13 @@ pub fn get_taps_clone_dir() -> Result<PathBuf> {
     Ok(get_skillshub_home()?.join("taps"))
 }
 
+/// Get the clone directory for a specific tap (~/.skillshub/taps/owner/repo)
+#[allow(dead_code)]
+pub fn get_tap_clone_dir(tap_name: &str) -> Result<PathBuf> {
+    let taps_dir = get_taps_clone_dir()?;
+    Ok(crate::registry::git::tap_clone_path(&taps_dir, tap_name))
+}
+
 /// Check if a directory looks like a valid skillshub skills directory
 /// (contains at least one subdirectory with a SKILL.md file)
 fn is_valid_skills_dir(path: &Path) -> bool {
@@ -131,6 +138,14 @@ mod tests {
         let dir = get_taps_clone_dir().unwrap();
         assert!(dir.ends_with("taps"));
         assert!(dir.parent().unwrap().ends_with(".skillshub"));
+    }
+
+    #[test]
+    #[serial]
+    fn test_get_tap_clone_dir() {
+        let dir = get_tap_clone_dir("owner/repo").unwrap();
+        assert!(dir.ends_with("owner/repo"));
+        assert!(dir.parent().unwrap().parent().unwrap().ends_with("taps"));
     }
 
     #[test]
