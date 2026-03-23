@@ -8,19 +8,21 @@ skillshub/
 │   ├── agent.rs                # Agent detection
 │   ├── skill.rs                # Skill discovery and parsing
 │   ├── paths.rs                # Path utilities
-│   ├── util.rs                 # General utilities
+│   ├── util.rs                 # General utilities (copy_dir_contents, etc.)
 │   ├── commands/               # Command implementations
 │   │   ├── mod.rs
 │   │   ├── agents.rs           # Show detected agents
 │   │   ├── clean.rs            # Clean cache and links
+│   │   ├── doctor.rs           # Diagnostic checks (skillshub doctor)
 │   │   ├── external.rs         # External skills management
 │   │   └── link.rs             # Link skills to agents
 │   └── registry/               # Tap-based registry system
 │       ├── mod.rs
-│       ├── models.rs           # Data structures
+│       ├── models.rs           # Data structures (TapInfo, InstalledSkill, etc.)
 │       ├── db.rs               # Database operations (~/.skillshub/db.json)
-│       ├── github.rs           # GitHub API integration
-│       ├── tap.rs              # Tap management
+│       ├── git.rs              # Git CLI operations (clone, pull, ensure_clone)
+│       ├── github.rs           # GitHub API (gists, star lists, URL parsing)
+│       ├── tap.rs              # Tap management + local skill discovery
 │       ├── skill.rs            # Skill install/uninstall/update
 │       └── migration.rs        # Old installation migration
 ├── skills/                     # Bundled skills (default tap)
@@ -35,12 +37,19 @@ skillshub/
 ## Data Flow
 
 ```
-GitHub Tap Repository          Local Database           Installed Skills
-┌─────────────────────┐       ┌──────────────┐        ┌─────────────────────┐
-│ any/path/           │──────▶│ db.json      │◀──────▶│ ~/.skillshub/       │
-│   SKILL.md          │       │ - taps       │        │   skills/           │
-│   (auto-discovered) │       │ - installed  │        │     owner/repo/skill│
-└─────────────────────┘       │ - external   │        └─────────────────────┘
+GitHub Tap Repository          Local Clone                 Installed Skills
+┌─────────────────────┐       ┌──────────────────┐        ┌─────────────────────┐
+│ any/path/           │──git──▶ ~/.skillshub/     │──copy─▶│ ~/.skillshub/       │
+│   SKILL.md          │ clone │   taps/           │        │   skills/           │
+│   (auto-discovered) │       │     owner/repo/   │        │     owner/repo/skill│
+└─────────────────────┘       └──────────────────┘        └─────────────────────┘
+                                     │                            │
+                                     ▼                            │
+                              ┌──────────────┐                    │
+                              │ db.json      │◀───────────────────┘
+                              │ - taps       │
+                              │ - installed  │
+                              │ - external   │
                               └──────────────┘
                                      ▲
                                      │ discovers
@@ -49,6 +58,22 @@ GitHub Tap Repository          Local Database           Installed Skills
                               │ (external   │
                               │  skills)    │
                               └─────────────┘
+
+Local directory layout:
+~/.skillshub/
+├── db.json                     # Database
+├── taps/                       # Cloned tap repositories
+│   └── owner/
+│       └── repo/               # Shallow git clone
+│           ├── .git/
+│           └── skills/
+│               └── skill-name/
+│                   └── SKILL.md
+└── skills/                     # Installed skills (copied from taps/)
+    └── owner/
+        └── repo/
+            └── skill-name/
+                └── SKILL.md
 ```
 
 ## Key Concepts
@@ -56,7 +81,7 @@ GitHub Tap Repository          Local Database           Installed Skills
 - **Taps**: Git repositories containing skills (like Homebrew taps). Skills are auto-discovered by scanning for `SKILL.md` files.
 - **Skills**: Reusable instruction sets for AI coding agents, defined in `SKILL.md` files
 - **Database**: `~/.skillshub/db.json` tracks installed skills, their versions, and external skills
-- **Installation**: Skills are downloaded/copied to `~/.skillshub/skills/<owner>/<repo>/<skill>/`
+- **Installation**: Skills are copied from local tap clones to `~/.skillshub/skills/<owner>/<repo>/<skill>/`
 - **Linking**: Per-skill symlinks are created from agent skill directories
 - **External Skills**: Skills installed through other means (marketplace, manual) are discovered and synced
 

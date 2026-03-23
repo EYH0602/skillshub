@@ -58,9 +58,6 @@ The easiest way to add skills is directly from GitHub URLs:
 # Add a skill from any GitHub repository
 skillshub add https://github.com/user/repo/tree/main/skills/my-skill
 
-# Add with a specific commit (permalink)
-skillshub add https://github.com/user/repo/tree/abc1234/skills/my-skill
-
 # Add a skill from a GitHub Gist
 skillshub add https://gist.github.com/user/gist_id
 ```
@@ -78,9 +75,6 @@ skillshub search python
 
 # Install a skill from a tap (format: owner/repo/skill)
 skillshub install EYH0602/skillshub/code-reviewer
-
-# Install a specific version (by commit)
-skillshub install EYH0602/skillshub/code-reviewer@abc1234
 
 # Show detailed info about a skill
 skillshub info EYH0602/skillshub/code-reviewer
@@ -114,6 +108,9 @@ skillshub tap add https://github.com/some-org/some-skills
 
 # Add a tap and install all its skills in one command
 skillshub tap add anthropics/skills --install
+
+# Add a tap from a specific branch
+skillshub tap add user/repo --branch dev
 
 # Update tap registries (re-discover skills)
 skillshub tap update                        # Update all taps
@@ -208,18 +205,28 @@ Skillshub automatically detects and links to these coding agents:
 | OpenClaw | `~/.openclaw`  | `~/.openclaw/skills`  |
 | ZeroClaw | `~/.zeroclaw`  | `~/.zeroclaw/skills`  |
 
-## GitHub API Rate Limiting
+## GitHub API & Authentication
 
-Skillshub uses the GitHub API to discover skills in repositories. Unauthenticated requests are limited to 60 per hour, which may cause errors when adding taps or listing skills.
+Tap operations (`tap add`, `tap update`, `install`, `update`) use **local git clone/pull** — no GitHub API calls and no rate limits.
 
-To avoid rate limiting, set a GitHub personal access token:
+The GitHub API is only used for:
+- **Gist skills** (`skillshub add https://gist.github.com/...`)
+- **Star list imports** (`skillshub star-list ...`)
+
+For these operations, set a `GITHUB_TOKEN` to avoid rate limiting:
 
 ```bash
 export GITHUB_TOKEN=your_token_here
-skillshub tap add anthropics/skills
 ```
 
-You can generate a token at https://github.com/settings/tokens (no special scopes needed for public repos).
+For **private repositories**, configure git credential helpers or SSH keys — skillshub uses `git clone` directly.
+
+## Diagnostics
+
+```bash
+# Check git, tap clones, installed skills, and orphan clones
+skillshub doctor
+```
 
 ## How It Works
 
