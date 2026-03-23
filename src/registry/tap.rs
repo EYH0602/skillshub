@@ -12,8 +12,8 @@ use walkdir::WalkDir;
 use super::db::{self, DEFAULT_TAP_NAME};
 use super::git::{git_clone, pull_or_reclone, tap_clone_path};
 use super::github::{
-    discover_skills_from_repo, fetch_star_list_repos, is_gist_url, parse_github_url, parse_skill_md_content,
-    parse_star_list_url,
+    discover_skills_from_repo, fetch_star_list_repos, is_gist_url, is_safe_skill_name,
+    parse_github_url, parse_skill_md_content, parse_star_list_url,
 };
 use super::models::{Database, SkillEntry, TapInfo, TapRegistry};
 use crate::paths::get_taps_clone_dir;
@@ -567,6 +567,18 @@ pub(crate) fn discover_skills_from_local(clone_dir: &Path, tap_name: &str) -> Re
             if let Ok(content) = std::fs::read_to_string(entry.path()) {
                 match parse_skill_md_content(&content) {
                     Some((name, description)) => {
+                        // Reject names with path traversal sequences
+                        if !is_safe_skill_name(&name) {
+                            let rel_path = entry.path().strip_prefix(clone_dir).unwrap_or(entry.path());
+                            eprintln!(
+                                "  {} Skipping {}: unsafe skill name '{}'",
+                                "!".yellow(),
+                                rel_path.display(),
+                                name
+                            );
+                            continue;
+                        }
+
                         let skill_path = entry
                             .path()
                             .parent()
@@ -1359,5 +1371,67 @@ mod tests {
             result.unwrap_err().to_string().contains("No skills found"),
             "Error should mention no skills found"
         );
+    }
+
+    #[test]
+    fn test_discover_skips_malicious_frontmatter_name() {
+        let temp = tempfile::TempDir::new().unwrap();
+
+        // Skill with path-traversal name in frontmatter
+        let malicious_dir = temp.path().join("evil-skill");
+        std::fs::create_dir_all(&malicious_dir).unwrap();
+        std::fs::write(
+            malicious_dir.join("SKILL.md"),
+            "---\nname: ../../../pwned\ndescription: Malicious skill\n---\nEvil content",
+        )
+        .unwrap();
+
+        // Also add a legitimate skill so the registry isn't empty
+        let good_dir = temp.path().join("good-skill");
+        std::fs::create_dir_all(&good_dir).unwrap();
+        std::fs::write(
+            good_dir.join("SKILL.md"),
+            "---\nname: good-skill\ndescription: Legit skill\n---\nGood content",
+        )
+        .unwrap();
+
+        let registry = discover_skills_from_local(temp.path(), "test/tap").unwrap();
+        assert!(
+            !registry.skills.contains_key("../../../pwned"),
+            "Malicious frontmatter name should be rejected"
+        );
+        assert!(
+            registry.skills.contains_key("good-skill"),
+            "Legitimate skill should still be discovered"
+        );
+    }
+
+    #[test]
+    fn test_discover_skips_malicious_directory_traversal_name() {
+        let temp = tempfile::TempDir::new().unwrap();
+
+        // Skills with various unsafe names
+        for name in &["../escape", "foo/bar", "foo\\bar", "..", "."] {
+            let dir = temp.path().join("skills").join(name.replace(['/', '\\'], "_"));
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join("SKILL.md"),
+                format!("---\nname: {}\ndescription: Bad\n---\nContent", name),
+            )
+            .unwrap();
+        }
+
+        // Add a good skill
+        let good_dir = temp.path().join("skills").join("legit");
+        std::fs::create_dir_all(&good_dir).unwrap();
+        std::fs::write(
+            good_dir.join("SKILL.md"),
+            "---\nname: legit\ndescription: Good skill\n---\nContent",
+        )
+        .unwrap();
+
+        let registry = discover_skills_from_local(temp.path(), "test/tap").unwrap();
+        assert_eq!(registry.skills.len(), 1, "Only the safe skill should be in the registry");
+        assert!(registry.skills.contains_key("legit"));
     }
 }

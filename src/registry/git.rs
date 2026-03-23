@@ -79,7 +79,6 @@ pub fn git_head_sha(repo_path: &Path) -> Result<String> {
 }
 
 /// Ensure a tap clone exists and is healthy. Clone if missing or corrupted.
-#[allow(dead_code)]
 pub fn ensure_clone(clone_dir: &Path, url: &str, branch: Option<&str>) -> Result<PathBuf> {
     if clone_dir.join(".git").exists() {
         // Verify the clone is functional
@@ -137,17 +136,39 @@ pub fn ensure_clone(clone_dir: &Path, url: &str, branch: Option<&str>) -> Result
 }
 
 /// Pull latest changes, falling back to delete + re-clone on failure.
+///
+/// On pull failure, the existing clone is renamed to a backup before re-cloning.
+/// If re-clone also fails (e.g. transient network error), the backup is restored
+/// so the user doesn't lose their local clone.
 pub fn pull_or_reclone(clone_dir: &Path, url: &str, branch: Option<&str>) -> Result<()> {
     match git_pull(clone_dir) {
         Ok(()) => Ok(()),
         Err(_) => {
             eprintln!("  Pull failed, re-cloning...");
-            std::fs::remove_dir_all(clone_dir)?;
+            let backup = clone_dir.with_extension("bak");
+            // Move existing clone to backup
+            if backup.exists() {
+                std::fs::remove_dir_all(&backup)?;
+            }
+            std::fs::rename(clone_dir, &backup)?;
+
             if let Some(parent) = clone_dir.parent() {
                 std::fs::create_dir_all(parent)?;
             }
-            git_clone(url, clone_dir, branch)?;
-            Ok(())
+
+            match git_clone(url, clone_dir, branch) {
+                Ok(()) => {
+                    // Re-clone succeeded, clean up backup
+                    let _ = std::fs::remove_dir_all(&backup);
+                    Ok(())
+                }
+                Err(e) => {
+                    // Re-clone failed, restore backup so the user keeps their clone
+                    eprintln!("  Re-clone failed, restoring previous clone...");
+                    let _ = std::fs::rename(&backup, clone_dir);
+                    Err(e)
+                }
+            }
         }
     }
 }

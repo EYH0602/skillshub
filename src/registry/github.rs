@@ -648,7 +648,7 @@ pub fn fetch_gist(gist_id: &str) -> Result<GistResponse> {
 /// Rejects names containing path traversal sequences (`..`, `/`, `\`) or
 /// names that are empty / consist only of dots, which could escape the
 /// intended install directory.
-fn is_safe_skill_name(name: &str) -> bool {
+pub(crate) fn is_safe_skill_name(name: &str) -> bool {
     !name.is_empty() && !name.contains('/') && !name.contains('\\') && !name.contains("..") && name != "."
 }
 

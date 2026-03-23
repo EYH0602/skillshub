@@ -186,6 +186,14 @@ pub fn add_skill_from_url(url: &str) -> Result<()> {
         return Ok(());
     }
 
+    // Reject pinned commit SHAs for non-gist taps — git clone -b cannot checkout a SHA
+    if github_url.is_commit_sha() {
+        anyhow::bail!(
+            "Pinned commits (@SHA) are not supported for git-based taps. \
+             Use --branch with a branch or tag name instead."
+        );
+    }
+
     println!("{} Adding '{}' from {}", "=>".green().bold(), full_name, url);
 
     // Ensure tap clone exists
