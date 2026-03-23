@@ -1,1236 +1,389 @@
-# Git-Based Tap Management Implementation Plan
+# Git-Based Tap Management — Implementation Plan (v2)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace GitHub API-based tap management with local git clone/pull operations to eliminate rate limiting and improve performance (Issue #51).
+**Goal:** Complete the migration from GitHub API-based tap management to local git clone/pull operations. PR #52 partially implemented this; this plan covers the remaining work for a major version release (0.3.0+).
 
-**Architecture:** Taps are shallow-cloned to `~/.skillshub/taps/<owner>/<repo>/` on `tap add`. Updates use `git pull`. Skill installation copies files from the local clone instead of downloading tarballs via API. Gist taps and star list imports retain API-based access. If a clone doesn't exist when needed (upgrade from older version), it's created automatically.
+**Architecture:** Taps are shallow-cloned to `~/.skillshub/taps/<owner>/<repo>/` on `tap add`. Updates use `git pull` with delete-and-reclone fallback. Skill installation copies files from the local clone. Gist taps and star list imports retain API-based access. If a clone doesn't exist when needed (upgrade from older version), it's created automatically via `ensure_clone`.
 
 **Tech Stack:** `std::process::Command` for git CLI, `walkdir` crate for filesystem traversal.
 
-**Behavioral changes:**
-- **`@commit` specifier is dropped for non-gist taps.** With shallow clones (`--depth 1`), checking out arbitrary historical commits is not supported. The `@commit` syntax will be silently ignored. Update CLI help text accordingly.
-- **Branch/commit in URL for `add` is ignored.** `skillshub add https://github.com/owner/repo/tree/abc1234/skills/my-skill` will clone the default branch and copy from HEAD, not from the specified commit. The old behavior downloaded a specific commit.
-- **Private repos require git credential helpers.** The old API path used `GITHUB_TOKEN` for auth. Git clone uses the system's configured credential helpers or SSH keys instead.
+**Breaking changes (major version bump):**
+- **`@commit` specifier produces a hard error for non-gist taps.** Shallow clones cannot checkout arbitrary commits. Message: "Pinned commits are not supported for git-based taps. Remove the @commit specifier." Gist taps retain `@commit` via the API.
+- **Private repos require git credential helpers.** The old API path used `GITHUB_TOKEN`. Git clone uses system credential helpers or SSH keys instead.
+- **`git` is now a hard requirement.** A `check_git()` pre-flight runs before any git operation.
+
+**Dependencies:**
+- **Add:** `walkdir` (recursive directory scanning)
+- **Remove:** `flate2`, `tar` (tarball extraction — no longer used)
+- **Keep:** `reqwest` (still needed for gist API and star-list GraphQL)
+
+---
+
+## Review Status
+
+This plan incorporates decisions from:
+- **CEO Review** (2026-03-23): Approach C (Full Removal + Resilience), 5 cherry-picks accepted, 7 issues resolved
+- **Eng Review** (2026-03-23): 5 issues resolved (pull fallback design, copy_dir_contents move, shared test helpers, registry cache composability, discovery scope)
+- **Codex Review** (2026-03-23): 2 new findings addressed (registry cache, discovery validation)
+- **Spec Review** (2026-03-23): Clarifications on ensure_clone, pull fallback, @commit, db migration
+
+---
+
+## What's Already Done (PR #52)
+
+Tasks 1–7 from the original plan were implemented in commit `b0326d8`:
+- [x] Taps directory paths (`get_taps_clone_dir` in paths.rs)
+- [x] Git module (`git_clone`, `git_pull`, `git_head_sha`, `tap_clone_path` in git.rs)
+- [x] Local skill discovery (`discover_skills_from_local` in github.rs)
+- [x] `tap add` uses git clone (with gist fallback to API)
+- [x] `tap update` uses git pull (with auto-clone for legacy taps)
+- [x] `tap remove` cleans up clone directory
+- [x] `install_skill_internal` tries local clone first (API fallback retained)
+- [x] `update_skill` tries local clone first (API fallback retained)
+
+**What PR #52 did NOT do (this plan's scope):**
+- `add_skill_from_url` still uses API tarball download
+- API fallback paths still exist in `install_skill_internal` and `update_skill`
+- Dead API functions still in github.rs (~400-500 LOC)
+- `flate2`/`tar` still in dependencies
+- No `check_git`, `ensure_clone`, or pull fallback
+- No `walkdir` (manual `walk_dir_for_skills` instead)
+- No `--branch` flag, `doctor` command, or progress streaming
 
 ---
 
 ## File Structure
 
 ### New Files
-- `src/registry/git.rs` — Git CLI wrapper: clone, pull, HEAD SHA, ensure-clone
+- `src/commands/doctor.rs` — `skillshub doctor` diagnostic command
 
 ### Modified Files
-- `src/paths.rs:19` — Add `get_taps_dir()` and `get_tap_clone_dir()`
-- `src/registry/mod.rs:1` — Add `pub mod git`
-- `src/registry/tap.rs:30-324` — Refactor `add_tap`, `update_single_tap`, `remove_tap`; add `discover_skills_from_clone()`
-- `src/registry/skill.rs:51-604` — Refactor `install_skill_internal`, `install_from_remote`, `update_skill`, `add_skill_from_url`
-- `src/registry/github.rs:460-714` — Remove `discover_skills_from_repo`, `download_skill`, `get_latest_commit`, `get_default_branch`, `TreeResponse`, `TreeEntry`, `RepoInfo`; make `parse_skill_md_content` and `copy_dir_contents` `pub(crate)`
+- `src/registry/git.rs` — Add `check_git`, `ensure_clone`, `pull_or_reclone`; change `git_clone`/`git_pull` to stream progress
+- `src/paths.rs` — Add `get_tap_clone_dir(tap_name)`
+- `src/registry/tap.rs` — Move `discover_skills_from_local` + `walk_dir_for_skills` here from github.rs; use `walkdir` crate; add broader directory filters + duplicate warning
+- `src/registry/skill.rs` — Convert `add_skill_from_url` for git repos; remove API fallback from `install_skill_internal` and `update_skill`; add path containment check and copy cleanup to `install_from_clone`
+- `src/registry/github.rs` — Remove dead functions: `discover_skills_from_repo`, `download_skill`, `get_default_branch`, `get_latest_commit`, `extract_skill_paths`, `TreeResponse`, `TreeEntry`, `RepoInfo`
+- `src/registry/models.rs` — Add `branch: Option<String>` to `TapInfo`
+- `src/util.rs` — Move `copy_dir_contents` here from github.rs
+- `src/cli.rs` — Add `--branch` flag to `tap add`, add `doctor` subcommand
+- `src/registry/mod.rs` — No changes needed (git module already declared)
+- `Cargo.toml` — Add `walkdir`, remove `flate2`/`tar`
+- `tests/common/mod.rs` — Add shared `init_test_repo` helpers
+- `docs/architecture.md` — Update for new taps directory structure
 
 ---
 
-## Task 1: Add Taps Directory Paths
+## Task 8: Add Git Resilience to `git.rs`
 
-**Files:**
-- Modify: `src/paths.rs`
+**Files:** `src/registry/git.rs`, `src/paths.rs`
 
-- [ ] **Step 1: Write the failing tests**
+- [ ] **Step 1: Add `check_git()` function**
 
 ```rust
-// Add to the existing #[cfg(test)] mod tests block in src/paths.rs
-
-#[test]
-#[serial]
-fn test_get_taps_dir() {
-    let dir = get_taps_dir().unwrap();
-    assert!(dir.ends_with("taps"));
-    assert!(dir.parent().unwrap().ends_with(".skillshub"));
-}
-
-#[test]
-#[serial]
-fn test_get_tap_clone_dir() {
-    let dir = get_tap_clone_dir("owner/repo").unwrap();
-    assert!(dir.ends_with("repo"));
-    assert!(dir.parent().unwrap().ends_with("owner"));
-    assert!(dir
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .ends_with("taps"));
+/// Pre-flight check that git is available.
+pub fn check_git() -> Result<()> {
+    let output = Command::new("git")
+        .arg("--version")
+        .output()
+        .context("git is not installed or not in PATH")?;
+    if !output.status.success() {
+        anyhow::bail!("git is not working properly");
+    }
+    Ok(())
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
-
-Run: `cargo test --lib paths::tests::test_get_taps_dir paths::tests::test_get_tap_clone_dir`
-Expected: FAIL — functions don't exist
-
-- [ ] **Step 3: Implement the path functions**
-
-Add after `get_skills_install_dir()` (line 21) in `src/paths.rs`:
+- [ ] **Step 2: Add `get_tap_clone_dir` to `paths.rs`**
 
 ```rust
-/// Get the taps directory (~/.skillshub/taps)
-pub fn get_taps_dir() -> Result<PathBuf> {
-    Ok(get_skillshub_home()?.join("taps"))
-}
-
 /// Get the clone directory for a specific tap (~/.skillshub/taps/owner/repo)
 pub fn get_tap_clone_dir(tap_name: &str) -> Result<PathBuf> {
-    Ok(get_taps_dir()?.join(tap_name))
+    let taps_dir = get_taps_clone_dir()?;
+    Ok(super::registry::git::tap_clone_path(&taps_dir, tap_name))
 }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [ ] **Step 3: Add `ensure_clone()` function**
 
-Run: `cargo test --lib paths::tests`
-Expected: all PASS
-
-- [ ] **Step 5: Commit**
-
-```
-feat: add taps directory path helpers
-```
-
----
-
-## Task 2: Create Git Module
-
-**Files:**
-- Create: `src/registry/git.rs`
-- Modify: `src/registry/mod.rs`
-
-- [ ] **Step 1: Write the failing tests**
-
-Create `src/registry/git.rs` with tests only:
+Corruption check: `.git` directory exists AND `git rev-parse HEAD` succeeds AND remote URL matches expected URL. If any fail, delete directory and re-clone.
 
 ```rust
-use anyhow::{Context, Result};
-use std::path::Path;
-use std::process::Command;
-
-use crate::paths::get_tap_clone_dir;
-
-/// Check if git is available on the system
-fn check_git() -> Result<()> {
-    let output = Command::new("git")
-        .arg("--version")
-        .output()
-        .context("git is not installed or not in PATH")?;
-    if !output.status.success() {
-        anyhow::bail!("git is not working properly");
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::tempdir;
-    use std::fs;
-
-    fn init_test_repo(dir: &Path) {
-        Command::new("git")
-            .args(["init"])
-            .current_dir(dir)
-            .output()
-            .unwrap();
-        Command::new("git")
-            .args(["config", "user.email", "test@test.com"])
-            .current_dir(dir)
-            .output()
-            .unwrap();
-        Command::new("git")
-            .args(["config", "user.name", "Test"])
-            .current_dir(dir)
-            .output()
-            .unwrap();
-        fs::write(dir.join("README.md"), "# test").unwrap();
-        Command::new("git")
-            .args(["add", "."])
-            .current_dir(dir)
-            .output()
-            .unwrap();
-        Command::new("git")
-            .args(["commit", "-m", "init"])
-            .current_dir(dir)
-            .output()
-            .unwrap();
-    }
-
-    #[test]
-    fn test_clone_repo() {
-        let origin = tempdir().unwrap();
-        init_test_repo(origin.path());
-
-        let dest = tempdir().unwrap();
-        let clone_path = dest.path().join("clone");
-
-        clone_repo(origin.path().to_str().unwrap(), &clone_path).unwrap();
-
-        assert!(clone_path.join("README.md").exists());
-        assert!(clone_path.join(".git").exists());
-    }
-
-    #[test]
-    fn test_pull_repo() {
-        let origin = tempdir().unwrap();
-        init_test_repo(origin.path());
-
-        let dest = tempdir().unwrap();
-        let clone_path = dest.path().join("clone");
-        clone_repo(origin.path().to_str().unwrap(), &clone_path).unwrap();
-
-        // Add a new file in origin
-        fs::write(origin.path().join("new.txt"), "new content").unwrap();
-        Command::new("git")
-            .args(["add", "."])
-            .current_dir(origin.path())
-            .output()
-            .unwrap();
-        Command::new("git")
-            .args(["commit", "-m", "add new file"])
-            .current_dir(origin.path())
-            .output()
-            .unwrap();
-
-        // Pull in clone
-        pull_repo(&clone_path).unwrap();
-
-        assert!(clone_path.join("new.txt").exists());
-    }
-
-    #[test]
-    fn test_get_head_sha() {
-        let origin = tempdir().unwrap();
-        init_test_repo(origin.path());
-
-        let sha = get_head_sha(origin.path()).unwrap();
-        assert_eq!(sha.len(), 7);
-        assert!(sha.chars().all(|c| c.is_ascii_hexdigit()));
-    }
-
-    #[test]
-    fn test_ensure_clone_creates_if_missing() {
-        let origin = tempdir().unwrap();
-        init_test_repo(origin.path());
-
-        let dest = tempdir().unwrap();
-        let clone_path = dest.path().join("taps/owner/repo");
-
-        let result = ensure_clone(&clone_path, origin.path().to_str().unwrap()).unwrap();
-        assert_eq!(result, clone_path);
-        assert!(clone_path.join(".git").exists());
-    }
-
-    #[test]
-    fn test_ensure_clone_noop_if_exists() {
-        let origin = tempdir().unwrap();
-        init_test_repo(origin.path());
-
-        let dest = tempdir().unwrap();
-        let clone_path = dest.path().join("clone");
-        clone_repo(origin.path().to_str().unwrap(), &clone_path).unwrap();
-
-        // Should succeed without re-cloning
-        let result = ensure_clone(&clone_path, origin.path().to_str().unwrap()).unwrap();
-        assert_eq!(result, clone_path);
-    }
-}
-```
-
-- [ ] **Step 2: Add module declaration**
-
-Add `pub mod git;` to `src/registry/mod.rs` (after `pub mod github;`).
-
-- [ ] **Step 3: Run tests to verify they fail**
-
-Run: `cargo test --lib registry::git::tests`
-Expected: FAIL — functions don't exist
-
-- [ ] **Step 4: Implement the git functions**
-
-Add the implementations above the `#[cfg(test)]` block in `src/registry/git.rs`:
-
-```rust
-use anyhow::{Context, Result};
-use std::path::{Path, PathBuf};
-use std::process::Command;
-
-/// Check that git is available
-fn check_git() -> Result<()> {
-    let output = Command::new("git")
-        .arg("--version")
-        .output()
-        .context("git is not installed or not in PATH")?;
-    if !output.status.success() {
-        anyhow::bail!("git is not working properly");
-    }
-    Ok(())
-}
-
-/// Shallow-clone a repository to dest
-pub fn clone_repo(url: &str, dest: &Path) -> Result<()> {
-    check_git()?;
-
-    if let Some(parent) = dest.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    let output = Command::new("git")
-        .args([
-            "clone",
-            "--depth",
-            "1",
-            "--single-branch",
-            url,
-            &dest.to_string_lossy(),
-        ])
-        .output()
-        .context("Failed to run git clone")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("git clone failed: {}", stderr.trim());
-    }
-
-    Ok(())
-}
-
-/// Pull latest changes in a cloned repository.
-/// Falls back to delete + re-clone if fast-forward fails (e.g., force-push).
-pub fn pull_repo(repo_path: &Path) -> Result<()> {
-    check_git()?;
-
-    let output = Command::new("git")
-        .args(["pull", "--ff-only"])
-        .current_dir(repo_path)
-        .output()
-        .context("Failed to run git pull")?;
-
-    if !output.status.success() {
-        // Fast-forward failed (force-push, diverged history, etc.)
-        // Fall back to fetch + reset for shallow clones
-        let fetch = Command::new("git")
-            .args(["fetch", "--depth", "1", "origin"])
-            .current_dir(repo_path)
-            .output()
-            .context("Failed to run git fetch")?;
-
-        if !fetch.status.success() {
-            let stderr = String::from_utf8_lossy(&fetch.stderr);
-            anyhow::bail!("git fetch failed: {}", stderr.trim());
-        }
-
-        let reset = Command::new("git")
-            .args(["reset", "--hard", "origin/HEAD"])
-            .current_dir(repo_path)
-            .output()
-            .context("Failed to run git reset")?;
-
-        if !reset.status.success() {
-            let stderr = String::from_utf8_lossy(&reset.stderr);
-            anyhow::bail!("git reset failed: {}", stderr.trim());
-        }
-    }
-
-    Ok(())
-}
-
-/// Get the short (7-char) HEAD commit SHA
-pub fn get_head_sha(repo_path: &Path) -> Result<String> {
-    check_git()?;
-
-    let output = Command::new("git")
-        .args(["rev-parse", "--short=7", "HEAD"])
-        .current_dir(repo_path)
-        .output()
-        .context("Failed to run git rev-parse")?;
-
-    if !output.status.success() {
-        anyhow::bail!("git rev-parse failed");
-    }
-
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-}
-
-/// Ensure a tap clone exists. Clone if missing or corrupted, return the path.
-pub fn ensure_clone(clone_dir: &Path, url: &str) -> Result<PathBuf> {
+/// Ensure a tap clone exists and is healthy. Clone if missing or corrupted.
+pub fn ensure_clone(clone_dir: &Path, url: &str, branch: Option<&str>) -> Result<PathBuf> {
     if clone_dir.join(".git").exists() {
-        // Quick sanity check: verify the clone is functional
-        let check = Command::new("git")
+        // Verify the clone is functional
+        let rev_check = Command::new("git")
             .args(["rev-parse", "HEAD"])
             .current_dir(clone_dir)
             .output();
 
-        match check {
-            Ok(output) if output.status.success() => return Ok(clone_dir.to_path_buf()),
-            _ => {
-                // Corrupted clone — remove and re-clone
-                std::fs::remove_dir_all(clone_dir)?;
-            }
+        let rev_ok = matches!(rev_check, Ok(output) if output.status.success());
+
+        // Verify remote URL matches expected
+        let remote_ok = if rev_ok {
+            let remote = Command::new("git")
+                .args(["remote", "get-url", "origin"])
+                .current_dir(clone_dir)
+                .output();
+            matches!(remote, Ok(output) if output.status.success()
+                && String::from_utf8_lossy(&output.stdout).trim() == url)
+        } else {
+            false
+        };
+
+        if rev_ok && remote_ok {
+            return Ok(clone_dir.to_path_buf());
         }
+
+        // Corrupted or wrong remote — remove and re-clone
+        eprintln!("  Re-cloning tap (clone was corrupted or remote changed)...");
+        std::fs::remove_dir_all(clone_dir)?;
     }
 
-    clone_repo(url, clone_dir)?;
+    // Clone from scratch
+    if let Some(parent) = clone_dir.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    git_clone(url, clone_dir, branch)?;
     Ok(clone_dir.to_path_buf())
 }
 ```
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [ ] **Step 4: Add `pull_or_reclone()` wrapper**
 
-Run: `cargo test --lib registry::git::tests`
-Expected: all PASS
-
-- [ ] **Step 6: Commit**
-
-```
-feat: add git module for clone/pull/sha operations
-```
-
----
-
-## Task 3: Add Local Skill Discovery
-
-**Files:**
-- Modify: `src/registry/tap.rs`
-- Modify: `src/registry/github.rs` (make `parse_skill_md_content` pub(crate))
-
-- [ ] **Step 0: Add `walkdir` dependency**
-
-Run: `cargo add walkdir`
-
-- [ ] **Step 1: Make `parse_skill_md_content` accessible**
-
-In `src/registry/github.rs:559`, change:
-```rust
-fn parse_skill_md_content(content: &str) -> Option<(String, Option<String>)> {
-```
-to:
-```rust
-pub(crate) fn parse_skill_md_content(content: &str) -> Option<(String, Option<String>)> {
-```
-
-- [ ] **Step 2: Write the failing test**
-
-Add to `src/registry/tap.rs` test module:
+If `git pull --ff-only` fails (force-push, diverged), delete clone and re-clone. The clone is disposable — it's just a cache.
 
 ```rust
-#[cfg(test)]
-mod tests {
-    // ... existing tests ...
-
-    use super::*;
-    use tempfile::tempdir;
-
-    #[test]
-    fn test_discover_skills_from_clone_finds_skills() {
-        let dir = tempdir().unwrap();
-        let skills_dir = dir.path().join("skills").join("my-skill");
-        std::fs::create_dir_all(&skills_dir).unwrap();
-        std::fs::write(
-            skills_dir.join("SKILL.md"),
-            "---\nname: my-skill\ndescription: A test skill\n---\n# My Skill",
-        )
-        .unwrap();
-
-        let registry = discover_skills_from_clone(dir.path(), "test-tap").unwrap();
-        assert_eq!(registry.skills.len(), 1);
-        assert!(registry.skills.contains_key("my-skill"));
-        assert_eq!(
-            registry.skills["my-skill"].description.as_deref(),
-            Some("A test skill")
-        );
-    }
-
-    #[test]
-    fn test_discover_skills_from_clone_skips_git_dir() {
-        let dir = tempdir().unwrap();
-        // Skill in .git should be ignored
-        let git_skill = dir.path().join(".git").join("skill");
-        std::fs::create_dir_all(&git_skill).unwrap();
-        std::fs::write(
-            git_skill.join("SKILL.md"),
-            "---\nname: hidden\ndescription: hidden\n---\n",
-        )
-        .unwrap();
-
-        // Real skill
-        let real_skill = dir.path().join("skills").join("real");
-        std::fs::create_dir_all(&real_skill).unwrap();
-        std::fs::write(
-            real_skill.join("SKILL.md"),
-            "---\nname: real\ndescription: A real skill\n---\n",
-        )
-        .unwrap();
-
-        let registry = discover_skills_from_clone(dir.path(), "test-tap").unwrap();
-        assert_eq!(registry.skills.len(), 1);
-        assert!(registry.skills.contains_key("real"));
-    }
-
-    #[test]
-    fn test_discover_skills_from_clone_root_level_skill() {
-        let dir = tempdir().unwrap();
-        // SKILL.md at the root of the repo (no subdirectory)
-        std::fs::write(
-            dir.path().join("SKILL.md"),
-            "---\nname: root-skill\ndescription: A root skill\n---\n# Root",
-        )
-        .unwrap();
-
-        let registry = discover_skills_from_clone(dir.path(), "test-tap").unwrap();
-        assert_eq!(registry.skills.len(), 1);
-        assert!(registry.skills.contains_key("root-skill"));
-    }
-
-    #[test]
-    fn test_discover_skills_from_clone_empty_repo() {
-        let dir = tempdir().unwrap();
-        let registry = discover_skills_from_clone(dir.path(), "test-tap").unwrap();
-        assert!(registry.skills.is_empty());
+/// Pull latest changes, falling back to delete + re-clone on failure.
+pub fn pull_or_reclone(clone_dir: &Path, url: &str, branch: Option<&str>) -> Result<()> {
+    match git_pull(clone_dir) {
+        Ok(()) => Ok(()),
+        Err(_) => {
+            eprintln!("  Pull failed, re-cloning...");
+            std::fs::remove_dir_all(clone_dir)?;
+            if let Some(parent) = clone_dir.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            git_clone(url, clone_dir, branch)?;
+            Ok(())
+        }
     }
 }
 ```
 
-- [ ] **Step 3: Run tests to verify they fail**
+- [ ] **Step 5: Change `git_clone` and `git_pull` to stream progress**
 
-Run: `cargo test --lib registry::tap::tests::test_discover_skills_from_clone`
-Expected: FAIL — function doesn't exist
+Replace `.output()` with `.spawn()` + `.wait()` so git's progress output streams to the terminal:
 
-- [ ] **Step 4: Implement `discover_skills_from_clone`**
-
-Add to the top of `src/registry/tap.rs`:
 ```rust
-use std::path::Path;
-use super::github::parse_skill_md_content;
+pub fn git_clone(url: &str, dest: &Path, branch: Option<&str>) -> Result<()> {
+    check_git()?;
+    let mut cmd = Command::new("git");
+    cmd.args(["clone", "--depth", "1"]);
+    if let Some(b) = branch {
+        cmd.args(["-b", b]);
+    }
+    cmd.arg(url).arg(dest);
+
+    let status = cmd.status().context("Failed to run git clone (is git installed?)")?;
+    if !status.success() {
+        anyhow::bail!("git clone failed");
+    }
+    Ok(())
+}
 ```
 
-Then add the function before `get_tap_registry`:
+Note: `.status()` inherits stdin/stdout/stderr, so git progress output is visible. The tradeoff is we lose the stderr capture for error messages — the user sees git's error directly.
+
+- [ ] **Step 6: Write tests**
+
+Tests use local tempdir repos (no network). Add to `src/registry/git.rs` `#[cfg(test)]` block:
+- `test_check_git` — git available → Ok
+- `test_ensure_clone_creates_missing` — clone dir doesn't exist → creates it
+- `test_ensure_clone_repairs_corrupted` — .git missing → re-clones
+- `test_ensure_clone_repairs_wrong_remote` — remote URL doesn't match → re-clones
+- `test_ensure_clone_noop_healthy` — healthy clone → returns path
+- `test_pull_or_reclone_happy_path` — fast-forward → Ok
+- `test_pull_or_reclone_force_push` — ff-only fails → re-clones
+- `test_git_clone_with_branch_local` — clone specific branch of local repo
+- `test_git_pull_local` — pull new commit from local origin
+
+Replace existing `#[ignore]` network tests with these local equivalents.
+
+- [ ] **Step 7: Commit**
+
+```
+feat: add git resilience (check_git, ensure_clone, pull_or_reclone)
+```
+
+---
+
+## Task 9: Improve Discovery and Move to `tap.rs`
+
+**Files:** `src/registry/tap.rs`, `src/registry/github.rs`, `Cargo.toml`
+
+- [ ] **Step 1: Add `walkdir` dependency**
+
+```bash
+cargo add walkdir
+```
+
+- [ ] **Step 2: Move `discover_skills_from_local` and `walk_dir_for_skills` from `github.rs` to `tap.rs`**
+
+Rewrite using `walkdir` crate with broader directory filters:
 
 ```rust
-/// Discover skills by walking a local clone directory for SKILL.md files.
-///
-/// Scans the entire directory tree (excluding .git, node_modules, target)
-/// and builds a TapRegistry from the SKILL.md files found.
-pub(crate) fn discover_skills_from_clone(clone_dir: &Path, tap_name: &str) -> Result<TapRegistry> {
-    use std::collections::HashMap;
-    use super::models::SkillEntry;
-    use walkdir::WalkDir;
+use walkdir::WalkDir;
 
+/// Discover skills by walking a local clone directory for SKILL.md files.
+pub(crate) fn discover_skills_from_local(clone_dir: &Path, tap_name: &str) -> Result<TapRegistry> {
     let mut skills = HashMap::new();
+    let skip_dirs = [".git", "node_modules", "target", "test", "tests",
+                     "examples", "fixtures", "vendor", "benchmark"];
 
     for entry in WalkDir::new(clone_dir)
         .into_iter()
         .filter_entry(|e| {
             let name = e.file_name().to_string_lossy();
-            // Skip hidden dirs, node_modules, target
             !(e.file_type().is_dir()
-                && (name.starts_with('.') || name == "node_modules" || name == "target"))
+                && (name.starts_with('.') || skip_dirs.contains(&name.as_ref())))
         })
         .filter_map(|e| e.ok())
     {
         if entry.file_name() == "SKILL.md" && entry.file_type().is_file() {
             if let Ok(content) = std::fs::read_to_string(entry.path()) {
-                if let Some((name, description)) = parse_skill_md_content(&content) {
-                    // Path relative to clone root, parent of SKILL.md
-                    let skill_path = entry
-                        .path()
-                        .parent()
-                        .and_then(|p| p.strip_prefix(clone_dir).ok())
-                        .map(|p| p.to_string_lossy().to_string())
-                        .unwrap_or_default();
+                match parse_skill_md_content(&content) {
+                    Some((name, description)) => {
+                        let skill_path = entry.path().parent()
+                            .and_then(|p| p.strip_prefix(clone_dir).ok())
+                            .map(|p| p.to_string_lossy().to_string())
+                            .unwrap_or_default();
 
-                    skills.insert(
-                        name.clone(),
-                        SkillEntry {
-                            path: skill_path,
-                            description,
-                            homepage: None,
-                        },
-                    );
+                        // Warn on duplicate skill names
+                        if skills.contains_key(&name) {
+                            eprintln!(
+                                "  {} Duplicate skill name '{}' at {}, keeping first occurrence",
+                                "!".yellow(), name, skill_path
+                            );
+                        } else {
+                            skills.insert(name.clone(), SkillEntry {
+                                path: skill_path,
+                                description,
+                                homepage: None,
+                            });
+                        }
+                    }
+                    None => {
+                        // Warn about malformed SKILL.md
+                        let rel_path = entry.path().strip_prefix(clone_dir)
+                            .unwrap_or(entry.path());
+                        eprintln!(
+                            "  {} Skipping {}: invalid frontmatter (missing name field)",
+                            "!".yellow(), rel_path.display()
+                        );
+                    }
                 }
             }
         }
     }
 
+    if skills.is_empty() {
+        anyhow::bail!("No skills found in local clone (no valid SKILL.md files detected)");
+    }
+
     Ok(TapRegistry {
         name: tap_name.to_string(),
-        description: None,
+        description: Some(format!("Skills from {}", tap_name)),
         skills,
     })
 }
 ```
 
-**Note:** This uses the `walkdir` crate. Add it to `Cargo.toml`:
+- [ ] **Step 3: Remove `discover_skills_from_local` and `walk_dir_for_skills` from `github.rs`**
 
-```
-cargo add walkdir
-```
+Update imports in `tap.rs` accordingly — no longer importing these from `github.rs`.
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [ ] **Step 4: Update callers**
 
-Run: `cargo test --lib registry::tap::tests::test_discover_skills_from_clone`
-Expected: all PASS
+In `tap.rs`, `add_tap` and `update_single_tap` should call the local `discover_skills_from_local` instead of `super::github::discover_skills_from_local`.
+
+- [ ] **Step 5: Write tests**
+
+Add to `src/registry/tap.rs` test module:
+- `test_discover_finds_skills_in_subdirs`
+- `test_discover_finds_root_level_skill`
+- `test_discover_skips_git_dir`
+- `test_discover_skips_test_fixtures_dirs`
+- `test_discover_warns_malformed_skill_md`
+- `test_discover_warns_duplicate_names`
+- `test_discover_empty_repo_bails`
 
 - [ ] **Step 6: Commit**
 
 ```
-feat: add local skill discovery from cloned tap directories
+refactor: move discovery to tap.rs with walkdir, broader filters, and warnings
 ```
 
 ---
 
-## Task 4: Refactor `tap add` and `tap update` to Use Git
+## Task 10: Convert `add_skill_from_url` for Git Repos
 
-**Note:** These are combined into one task to avoid a build break (both reference `discover_skills_from_repo` which we're removing).
-
-**Files:**
-- Modify: `src/registry/tap.rs:30-90` (add_tap)
-- Modify: `src/registry/tap.rs:269-324` (update_single_tap)
-
-- [ ] **Step 1: Write integration test**
-
-Add to tests in `src/registry/tap.rs`:
-
-```rust
-#[test]
-fn test_add_tap_clones_repo() {
-    // This test verifies the new flow creates a clone directory.
-    // The actual `add_tap` function is tested via integration tests
-    // since it writes to ~/.skillshub. Here we test the building blocks.
-    let origin = tempdir().unwrap();
-
-    // Set up a fake repo with a skill
-    std::process::Command::new("git")
-        .args(["init"])
-        .current_dir(origin.path())
-        .output()
-        .unwrap();
-    std::process::Command::new("git")
-        .args(["config", "user.email", "test@test.com"])
-        .current_dir(origin.path())
-        .output()
-        .unwrap();
-    std::process::Command::new("git")
-        .args(["config", "user.name", "Test"])
-        .current_dir(origin.path())
-        .output()
-        .unwrap();
-
-    let skill_dir = origin.path().join("skills").join("test-skill");
-    std::fs::create_dir_all(&skill_dir).unwrap();
-    std::fs::write(
-        skill_dir.join("SKILL.md"),
-        "---\nname: test-skill\ndescription: A test\n---\n# Test",
-    )
-    .unwrap();
-
-    std::process::Command::new("git")
-        .args(["add", "."])
-        .current_dir(origin.path())
-        .output()
-        .unwrap();
-    std::process::Command::new("git")
-        .args(["commit", "-m", "init"])
-        .current_dir(origin.path())
-        .output()
-        .unwrap();
-
-    // Clone and discover
-    let dest = tempdir().unwrap();
-    let clone_path = dest.path().join("clone");
-    super::super::git::clone_repo(origin.path().to_str().unwrap(), &clone_path).unwrap();
-
-    let registry = discover_skills_from_clone(&clone_path, "test/repo").unwrap();
-    assert_eq!(registry.skills.len(), 1);
-    assert!(registry.skills.contains_key("test-skill"));
-}
-```
-
-- [ ] **Step 2: Refactor `add_tap`**
-
-Replace the body of `add_tap` in `src/registry/tap.rs:30-90`:
-
-```rust
-pub fn add_tap(url: &str, install: bool) -> Result<()> {
-    let github_url = parse_github_url(url)?;
-    let tap_name = github_url.tap_name();
-
-    let mut db = db::init_db()?;
-
-    if db.taps.contains_key(&tap_name) {
-        anyhow::bail!(
-            "Tap '{}' already exists. Use 'skillshub tap remove {}' first.",
-            tap_name,
-            tap_name
-        );
-    }
-
-    let base_url = github_url.base_url();
-    println!("{} Adding tap '{}' from {}", "=>".green().bold(), tap_name, base_url);
-
-    // Clone the repository locally
-    println!("  {} Cloning repository...", "○".yellow());
-    let clone_dir = crate::paths::get_tap_clone_dir(&tap_name)?;
-    super::git::clone_repo(&base_url, &clone_dir)
-        .with_context(|| format!("Failed to clone {}", base_url))?;
-
-    // Discover skills from the local clone
-    println!("  {} Discovering skills...", "○".yellow());
-    let registry = discover_skills_from_clone(&clone_dir, &tap_name)
-        .with_context(|| format!("Failed to discover skills from clone"))?;
-
-    let tap_info = TapInfo {
-        url: base_url.clone(),
-        skills_path: "skills".to_string(),
-        updated_at: Some(Utc::now()),
-        is_default: false,
-        cached_registry: Some(registry.clone()),
-    };
-
-    db::add_tap(&mut db, &tap_name, tap_info);
-    db::save_db(&db)?;
-
-    println!(
-        "  {} Added tap '{}' with {} skills",
-        "✓".green(),
-        tap_name,
-        registry.skills.len()
-    );
-
-    if !install && !registry.skills.is_empty() {
-        println!("\n  Available skills:");
-        for (name, entry) in registry.skills.iter().take(10) {
-            let desc = entry.description.as_deref().unwrap_or("No description");
-            println!("    {} {}/{} - {}", "•".cyan(), tap_name, name, desc);
-        }
-        if registry.skills.len() > 10 {
-            println!("    {} ... and {} more", "•".cyan(), registry.skills.len() - 10);
-        }
-    }
-
-    if install && !registry.skills.is_empty() {
-        println!();
-        super::skill::install_all_from_tap(&tap_name)?;
-    }
-
-    Ok(())
-}
-```
-
-- [ ] **Step 3: Refactor `update_single_tap`**
-
-Replace the function body at `src/registry/tap.rs:269`:
-
-```rust
-fn update_single_tap(db: &mut Database, name: &str, tap: &TapInfo) -> Result<TapUpdateResult> {
-    let tap_name_for_path = name.to_string();
-    let clone_dir = crate::paths::get_tap_clone_dir(&tap_name_for_path)?;
-
-    // Ensure clone exists (handles upgrade from API-based version)
-    super::git::ensure_clone(&clone_dir, &tap.url)?;
-
-    // Pull latest changes
-    super::git::pull_repo(&clone_dir)?;
-
-    // Re-discover skills from updated clone
-    let new_registry = discover_skills_from_clone(&clone_dir, name)?;
-
-    // Compare old vs new registries to detect changes
-    let old_skills: std::collections::HashSet<&String> = tap
-        .cached_registry
-        .as_ref()
-        .map(|r| r.skills.keys().collect())
-        .unwrap_or_default();
-    let new_skills_set: std::collections::HashSet<&String> = new_registry.skills.keys().collect();
-
-    let has_baseline = tap.cached_registry.is_some();
-
-    let mut added: Vec<String> = if has_baseline {
-        new_skills_set.difference(&old_skills).map(|s| (*s).clone()).collect()
-    } else {
-        Vec::new()
-    };
-    let mut removed: Vec<String> = if has_baseline {
-        old_skills.difference(&new_skills_set).map(|s| (*s).clone()).collect()
-    } else {
-        Vec::new()
-    };
-
-    added.sort();
-    removed.sort();
-
-    let mut removed_installed: Vec<String> = removed
-        .iter()
-        .filter(|skill_name| {
-            let full_name = format!("{}/{}", name, skill_name);
-            db.installed.contains_key(&full_name)
-        })
-        .cloned()
-        .collect();
-    removed_installed.sort();
-
-    let total = new_registry.skills.len();
-
-    if let Some(t) = db.taps.get_mut(name) {
-        t.cached_registry = Some(new_registry);
-        t.updated_at = Some(Utc::now());
-    }
-
-    Ok(TapUpdateResult {
-        total,
-        new_skills: added,
-        removed_skills: removed,
-        removed_installed,
-    })
-}
-```
-
-- [ ] **Step 4: Remove `discover_skills_from_repo` from imports**
-
-Update the import line at the top of `src/registry/tap.rs`:
-
-```rust
-// Before:
-use super::github::{discover_skills_from_repo, fetch_star_list_repos, parse_github_url, parse_star_list_url};
-
-// After:
-use super::github::{fetch_star_list_repos, parse_github_url, parse_star_list_url};
-```
-
-- [ ] **Step 5: Build and verify**
-
-Run: `cargo build`
-Expected: PASS
-
-- [ ] **Step 6: Run tests**
-
-Run: `cargo test --lib registry::tap`
-Expected: PASS
-
-- [ ] **Step 7: Commit**
-
-```
-feat: tap add/update uses git clone/pull instead of GitHub API
-```
-
----
-
-## Task 5: Refactor `tap remove` to Clean Up Clone
-
-**Files:**
-- Modify: `src/registry/tap.rs:93-141`
-
-- [ ] **Step 1: Add clone directory cleanup to `remove_tap`**
-
-In `remove_tap`, after `db::remove_tap(&mut db, name);` (line 135) and before `db::save_db`, add:
-
-```rust
-    // Remove the local clone directory
-    let clone_dir = crate::paths::get_tap_clone_dir(name)?;
-    if clone_dir.exists() {
-        std::fs::remove_dir_all(&clone_dir)?;
-        // Clean up empty parent directory (owner dir)
-        if let Some(parent) = clone_dir.parent() {
-            if parent.exists() && parent.read_dir()?.next().is_none() {
-                std::fs::remove_dir(parent)?;
-            }
-        }
-    }
-```
-
-- [ ] **Step 2: Build and run tests**
-
-Run: `cargo build && cargo test --lib registry::tap`
-Expected: PASS
-
-- [ ] **Step 3: Commit**
-
-```
-feat: tap remove cleans up local clone directory
-```
-
----
-
-## Task 6: Refactor Skill Install to Copy from Clone
-
-**Files:**
-- Modify: `src/registry/skill.rs:51-152` (`install_skill_internal`)
-- Modify: `src/registry/skill.rs:362-378` (`install_from_remote`)
-
-- [ ] **Step 1: Delete `install_from_remote` and add `install_from_clone`**
-
-Delete the `install_from_remote` function at `src/registry/skill.rs:362-378` and replace it with:
-
-```rust
-/// Install a skill by copying from the local tap clone
-fn install_from_clone(
-    tap_name: &str,
-    tap_url: &str,
-    skill_path: &str,
-    dest: &std::path::Path,
-) -> Result<Option<String>> {
-    let clone_dir = crate::paths::get_tap_clone_dir(tap_name)?;
-
-    // Ensure clone exists (handles first install or upgrade)
-    super::git::ensure_clone(&clone_dir, tap_url)?;
-
-    let source = clone_dir.join(skill_path);
-    if !source.exists() {
-        anyhow::bail!("Skill path '{}' not found in tap clone", skill_path);
-    }
-    if !source.join("SKILL.md").exists() {
-        anyhow::bail!("No SKILL.md found at '{}'", skill_path);
-    }
-
-    // Clean and copy
-    if dest.exists() {
-        std::fs::remove_dir_all(dest)?;
-    }
-    std::fs::create_dir_all(dest)?;
-    copy_dir_contents(&source, dest)?;
-
-    // Get commit SHA from the clone
-    let sha = super::git::get_head_sha(&clone_dir)?;
-    Ok(Some(sha))
-}
-```
-
-- [ ] **Step 2: Update `install_skill_internal` to use `install_from_clone`**
-
-In `install_skill_internal`, replace the non-default-tap branch (line 125-128):
-
-```rust
-    // Before:
-    } else {
-        let (commit, _) = install_from_remote(&tap.url, &skill_entry.path, &dest, requested_commit.as_deref())?;
-        commit
-    };
-
-    // After:
-    } else {
-        install_from_clone(&skill_id.tap, &tap.url, &skill_entry.path, &dest)?
-    };
-```
-
-And for the default tap fallback (line 121):
-
-```rust
-    // Before:
-    let (commit, _) = install_from_remote(&tap.url, &skill_entry.path, &dest, requested_commit.as_deref())?;
-    commit
-
-    // After:
-    install_from_clone(&skill_id.tap, &tap.url, &skill_entry.path, &dest)?
-```
-
-- [ ] **Step 3: Update imports in `src/registry/skill.rs`**
-
-Remove unused imports from the top of the file:
-
-```rust
-// Remove these from the import:
-// download_skill, get_default_branch, get_latest_commit
-
-// Keep these:
-use super::github::{
-    copy_dir_contents, discover_skills_from_gist, fetch_gist,
-    is_gist_url, parse_gist_url, parse_github_url,
-};
-```
-
-- [ ] **Step 4: Build and verify**
-
-Run: `cargo build`
-Expected: PASS (there may be warnings about unused `download_skill` etc. in github.rs — that's fine, cleaned up in Task 9)
-
-- [ ] **Step 5: Test manually**
-
-Run: `cargo run -- install EYH0602/skillshub/code-reviewer`
-Expected: installs from clone, shows commit SHA
-
-- [ ] **Step 6: Commit**
-
-```
-feat: skill install copies from local tap clone instead of API download
-```
-
----
-
-## Task 7: Refactor Skill Update to Use Local Operations
-
-**Files:**
-- Modify: `src/registry/skill.rs:414-604` (`update_skill`)
-
-- [ ] **Step 1: Replace the API-based update logic**
-
-In `update_skill`, replace the block from line 489 (after gist handling, starting at `let tap = match...`) through line 597 with:
-
-```rust
-        let tap = match db::get_tap(&db, &installed.tap) {
-            Some(t) => t.clone(),
-            None => {
-                println!("  {} {} (tap not found)", "✗".red(), skill_name);
-                continue;
-            }
-        };
-
-        // Skip gist-based taps (handled above)
-        if tap.url.contains("gist.github.com") {
-            continue;
-        }
-
-        let registry = match get_tap_registry(&db, &installed.tap) {
-            Ok(Some(r)) => r,
-            Ok(None) => {
-                println!(
-                    "  {} {} (no cached registry, run 'skillshub tap update')",
-                    "✗".red(),
-                    skill_name
-                );
-                continue;
-            }
-            Err(e) => {
-                println!("  {} {} ({})", "✗".red(), skill_name, e);
-                continue;
-            }
-        };
-
-        let skill_entry = match registry.skills.get(&installed.skill) {
-            Some(e) => e,
-            None => {
-                println!("  {} {} (not in registry)", "✗".red(), skill_name);
-                continue;
-            }
-        };
-
-        let clone_dir = match crate::paths::get_tap_clone_dir(&installed.tap) {
-            Ok(d) => d,
-            Err(e) => {
-                println!("  {} {} ({})", "✗".red(), skill_name, e);
-                continue;
-            }
-        };
-
-        // Ensure clone exists and pull latest
-        if let Err(e) = super::git::ensure_clone(&clone_dir, &tap.url) {
-            println!("  {} {} ({})", "✗".red(), skill_name, e);
-            continue;
-        }
-        if let Err(e) = super::git::pull_repo(&clone_dir) {
-            println!("  {} {} ({})", "✗".red(), skill_name, e);
-            continue;
-        }
-
-        // Compare HEAD SHA with installed commit
-        let latest_sha = match super::git::get_head_sha(&clone_dir) {
-            Ok(s) => s,
-            Err(e) => {
-                println!("  {} {} ({})", "✗".red(), skill_name, e);
-                continue;
-            }
-        };
-
-        let install_dir = get_skills_install_dir()?;
-        let dest = install_dir.join(&installed.tap).join(&installed.skill);
-        let is_default_tap = tap.is_default || installed.tap == DEFAULT_TAP_NAME;
-
-        // For default tap skills installed locally (commit=None), refresh from local bundled dir.
-        if is_default_tap && installed.commit.is_none() {
-            match install_from_local(&installed.skill, &dest) {
-                Ok(()) => {
-                    println!("  {} {} (bundled, refreshed)", "✓".green(), skill_name);
-                    updated_count += 1;
-                }
-                Err(e) => {
-                    println!("  {} {} ({})", "✗".red(), skill_name, e);
-                }
-            }
-            continue;
-        }
-
-        // Check if update needed
-        if installed.commit.as_deref() == Some(&latest_sha) {
-            println!("  {} {} (up to date)", "✓".green(), skill_name);
-            continue;
-        }
-
-        // Copy updated skill from clone
-        let source = clone_dir.join(&skill_entry.path);
-        if !source.exists() || !source.join("SKILL.md").exists() {
-            println!("  {} {} (skill path not found in clone)", "✗".red(), skill_name);
-            continue;
-        }
-
-        if dest.exists() {
-            std::fs::remove_dir_all(&dest)?;
-        }
-        std::fs::create_dir_all(&dest)?;
-        match copy_dir_contents(&source, &dest) {
-            Ok(()) => {
-                if let Some(skill) = db.installed.get_mut(&skill_name) {
-                    skill.commit = Some(latest_sha.clone());
-                    skill.installed_at = Utc::now();
-                }
-                println!(
-                    "  {} {} ({} -> {})",
-                    "✓".green(),
-                    skill_name,
-                    installed.commit.as_deref().unwrap_or("unknown"),
-                    latest_sha
-                );
-                updated_count += 1;
-            }
-            Err(e) => {
-                println!("  {} {} ({})", "✗".red(), skill_name, e);
-            }
-        }
-```
-
-- [ ] **Step 2: Remove unused imports**
-
-Remove `get_default_branch` and `get_latest_commit` from the import block if not already done.
-
-- [ ] **Step 3: Build and verify**
-
-Run: `cargo build`
-Expected: PASS
-
-- [ ] **Step 4: Test manually**
-
-Run: `cargo run -- update`
-Expected: checks updates via local git operations
-
-- [ ] **Step 5: Commit**
-
-```
-feat: skill update uses local git operations instead of API
-```
-
----
-
-## Task 8: Refactor `add_skill_from_url` to Use Clone
-
-**Files:**
-- Modify: `src/registry/skill.rs:154-253` (`add_skill_from_url`)
+**Files:** `src/registry/skill.rs`
 
 - [ ] **Step 1: Replace API download with clone-based install**
 
-Replace the body of `add_skill_from_url` (keeping the gist redirect at the top):
+In `add_skill_from_url`, after the gist check, replace the `download_skill` call with:
 
 ```rust
-pub fn add_skill_from_url(url: &str) -> Result<()> {
-    if is_gist_url(url) {
-        return add_skill_from_gist(url);
-    }
-
-    let github_url = parse_github_url(url)?;
-
-    let skill_path = github_url
-        .path
-        .as_ref()
-        .with_context(|| "URL must include path to skill folder (e.g., /tree/main/skills/my-skill)")?;
-
-    let skill_name = github_url
-        .skill_name()
-        .with_context(|| "Could not determine skill name from URL path")?;
-
-    let tap_name = github_url.tap_name().to_string();
-    let full_name = format!("{}/{}", tap_name, skill_name);
-
-    let mut db = db::init_db()?;
-    let install_dir = get_skills_install_dir()?;
-
-    if db::is_skill_installed(&db, &full_name) {
-        let installed = db::get_installed_skill(&db, &full_name).unwrap();
-        println!(
-            "{} Skill '{}' is already installed (commit: {})",
-            "Info:".cyan(),
-            full_name,
-            installed.commit.as_deref().unwrap_or("unknown")
-        );
-        println!(
-            "Use '{}' to update it.",
-            format!("skillshub update {}", full_name).bold()
-        );
-        return Ok(());
-    }
-
-    println!("{} Adding '{}' from {}", "=>".green().bold(), full_name, url);
-
     // Ensure tap clone exists
     let base_url = github_url.base_url();
     let clone_dir = crate::paths::get_tap_clone_dir(&tap_name)?;
-    super::git::ensure_clone(&clone_dir, &base_url)?;
+    super::git::ensure_clone(&clone_dir, &base_url, github_url.branch.as_deref())?;
 
     let dest = install_dir.join(&tap_name).join(&skill_name);
     std::fs::create_dir_all(&dest)?;
 
-    // Copy from clone
+    // Copy from clone with path containment check
     let source = clone_dir.join(skill_path);
-    if !source.exists() || !source.join("SKILL.md").exists() {
-        anyhow::bail!("Skill path '{}' not found in repository", skill_path);
+    let canonical_source = source.canonicalize()
+        .with_context(|| format!("Skill path '{}' not found in repository", skill_path))?;
+    let canonical_clone = clone_dir.canonicalize()?;
+    if !canonical_source.starts_with(&canonical_clone) {
+        anyhow::bail!("Skill path escapes clone directory");
+    }
+    if !canonical_source.join("SKILL.md").exists() {
+        anyhow::bail!("No SKILL.md found at '{}'", skill_path);
     }
     copy_dir_contents(&source, &dest)?;
 
-    let commit_sha = super::git::get_head_sha(&clone_dir)?;
+    let commit_sha = super::git::git_head_sha(&clone_dir)?;
 
-    // Add tap if it doesn't exist
+    // Populate cached_registry so `update` works without manual `tap update`
     if db::get_tap(&db, &tap_name).is_none() {
+        let registry = super::tap::discover_skills_from_local(&clone_dir, &tap_name)
+            .ok(); // Non-fatal: registry cache is a convenience
         let tap_info = super::models::TapInfo {
             url: base_url,
             skills_path: "skills".to_string(),
             updated_at: Some(Utc::now()),
             is_default: false,
-            cached_registry: None,
+            cached_registry: registry,
+            branch: github_url.branch.clone(),
         };
         db::add_tap(&mut db, &tap_name, tap_info);
     }
-
-    let installed = InstalledSkill {
-        tap: tap_name.clone(),
-        skill: skill_name.clone(),
-        commit: Some(commit_sha.clone()),
-        installed_at: Utc::now(),
-        source_url: Some(url.to_string()),
-        source_path: Some(skill_path.clone()),
-        gist_updated_at: None,
-    };
-
-    db::add_installed_skill(&mut db, &full_name, installed);
-    db::save_db(&db)?;
-
-    println!(
-        "{} Added '{}' (commit: {}) to {}",
-        "✓".green(),
-        full_name,
-        commit_sha,
-        dest.display()
-    );
-
-    link_to_agents()?;
-
-    Ok(())
-}
 ```
 
 - [ ] **Step 2: Remove `download_skill` from imports**
 
-The import line should now be:
-```rust
-use super::github::{
-    copy_dir_contents, discover_skills_from_gist, fetch_gist,
-    is_gist_url, parse_gist_url, parse_github_url,
-};
-```
+Remove `download_skill`, `get_default_branch`, `get_latest_commit` from the import block.
 
 - [ ] **Step 3: Build and verify**
 
-Run: `cargo build`
-Expected: PASS
+```bash
+cargo build
+```
 
 - [ ] **Step 4: Commit**
 
@@ -1240,96 +393,356 @@ feat: add-from-url uses local clone instead of API download
 
 ---
 
-## Task 9: Clean Up `github.rs`
+## Task 11: Remove API Fallback from `install_skill_internal` and `update_skill`
 
-**Files:**
-- Modify: `src/registry/github.rs`
+**Files:** `src/registry/skill.rs`
 
-- [ ] **Step 1: Remove now-unused functions and types**
+- [ ] **Step 1: Update `install_skill_internal`**
 
-Remove the following from `src/registry/github.rs`:
+Remove the API fallback branch. The install path becomes:
+1. Default tap → `install_from_local` (bundled skills)
+2. `@commit` on non-gist → **hard error**: "Pinned commits are not supported for git-based taps."
+3. All other taps → `install_from_clone` (no fallback to `install_from_remote`)
 
-1. `TreeResponse` struct (~line 285-288)
-2. `TreeEntry` struct (~line 291-296)
-3. `RepoInfo` struct (~line 299-302)
-4. `get_default_branch()` function (~line 330-356)
-5. `discover_skills_from_repo()` function (~line 465-556)
-6. `get_latest_commit()` function (~line 573-595)
-7. `download_skill()` function (~line 600-679)
-8. `extract_skill_paths()` function (~line 686-697)
-
-Keep:
-- All rate-limit/retry infrastructure (used by gist and star list APIs)
-- `parse_github_url()`, `is_valid_repo_id()`
-- `parse_skill_md_content()` (now `pub(crate)`, used by local discovery)
-- `copy_dir_contents()` (used by install)
-- All gist functions
-- All star list functions
-- `build_client()`, `with_auth()`
-
-- [ ] **Step 2: Remove unused imports**
-
-Remove `flate2`, `tar`, `Cursor` imports if they're only used by the removed functions. Check:
+- [ ] **Step 2: Add path containment + copy cleanup to `install_from_clone`**
 
 ```rust
-// Remove if unused:
-use flate2::read::GzDecoder;
-use tar::Archive;
-use std::io::Cursor;
+fn install_from_clone(tap_name: &str, tap_url: &str, skill_path: &str, dest: &std::path::Path) -> Result<Option<String>> {
+    let clone_dir = crate::paths::get_tap_clone_dir(tap_name)?;
+    super::git::ensure_clone(&clone_dir, tap_url, None)?;
+
+    let source = clone_dir.join(skill_path);
+
+    // Path containment check
+    let canonical_source = source.canonicalize()
+        .with_context(|| format!("Skill path '{}' not found in local clone", skill_path))?;
+    let canonical_clone = clone_dir.canonicalize()?;
+    if !canonical_source.starts_with(&canonical_clone) {
+        anyhow::bail!("Skill path escapes clone directory");
+    }
+    if !canonical_source.join("SKILL.md").exists() {
+        anyhow::bail!("No SKILL.md found in '{}'", skill_path);
+    }
+
+    // Clean destination and copy with cleanup on failure
+    if dest.exists() {
+        std::fs::remove_dir_all(dest)?;
+    }
+    std::fs::create_dir_all(dest)?;
+    if let Err(e) = copy_dir_contents(&source, dest) {
+        // Clean up partial copy before propagating error
+        let _ = std::fs::remove_dir_all(dest);
+        return Err(e.context("Failed to copy skill from clone"));
+    }
+
+    let commit = super::git::git_head_sha(&clone_dir).ok();
+    Ok(commit)
+}
 ```
 
-- [ ] **Step 3: Clean up `Cargo.toml` dependencies**
+- [ ] **Step 3: Update `update_skill` to remove API fallback**
 
-- Move `tempfile` from `[dependencies]` to `[dev-dependencies]` (only used in tests now)
-- Remove `flate2` and `tar` from `[dependencies]` if no longer used elsewhere
+Remove the entire block at the end of `update_skill` (lines 619-675) that falls back to `parse_github_url` → `get_default_branch` → `get_latest_commit` → `install_from_remote`. Replace with a bail: "No local clone for tap '{}'. Run 'skillshub tap update' to create one."
 
-Run: `cargo build` — the compiler will tell you about unused deps.
+Change the update flow to use `pull_or_reclone` instead of raw `git_pull`.
 
-- [ ] **Step 4: Build and verify**
+- [ ] **Step 4: Delete `install_from_remote` function**
 
-Run: `cargo build`
-Expected: PASS (no warnings about unused functions)
+Remove the entire function (lines 375-392).
 
-- [ ] **Step 5: Run full test suite**
+- [ ] **Step 5: Build and verify**
 
-Run: `cargo test`
-Expected: PASS (tests referencing removed functions need updating — see Task 11)
+```bash
+cargo build
+```
 
 - [ ] **Step 6: Commit**
 
 ```
-refactor: remove unused GitHub API functions (tree, tarball, commits)
+feat: remove API fallback, require local clone for install/update
 ```
 
 ---
 
-## Task 10: Update Tests
+## Task 12: Clean Up `github.rs` and Move `copy_dir_contents`
 
-**Files:**
-- Modify: `tests/common/mock_github.rs`
-- Modify: any integration tests referencing removed functions
+**Files:** `src/registry/github.rs`, `src/util.rs`, `Cargo.toml`
 
-- [ ] **Step 1: Audit test files for references to removed functions**
+- [ ] **Step 1: Move `copy_dir_contents` to `src/util.rs`**
 
-Run: `grep -r "discover_skills_from_repo\|download_skill\|get_latest_commit\|get_default_branch\|TreeResponse\|TreeEntry" tests/`
+Move the function and update all callers (`skill.rs`, gist install code) to import from `crate::util`.
 
-Remove or update any tests that directly test these removed functions. Tests that mock the tree/tarball API endpoints may need to be replaced with tests that set up local git repos instead.
+- [ ] **Step 2: Remove dead functions from `github.rs`**
+
+Remove:
+1. `TreeResponse` struct
+2. `TreeEntry` struct
+3. `RepoInfo` struct
+4. `get_default_branch()` function
+5. `discover_skills_from_repo()` function
+6. `get_latest_commit()` function
+7. `download_skill()` function
+8. `extract_skill_paths()` function
+
+Keep:
+- All rate-limit/retry infrastructure (used by gist and star list APIs)
+- `parse_github_url()`, `is_valid_repo_id()`, `is_gist_url()`
+- `parse_skill_md_content()` (pub(crate), used by tap.rs discovery and gist discovery)
+- All gist functions
+- All star list functions
+- `build_client()`, `with_auth()`
+
+- [ ] **Step 3: Remove unused imports**
+
+Remove `flate2`, `tar`, `Cursor` imports from `github.rs`.
+
+- [ ] **Step 4: Clean up `Cargo.toml` dependencies**
+
+Remove `flate2` and `tar` from `[dependencies]`.
+
+```bash
+cargo build  # Compiler will catch any missed references
+```
+
+- [ ] **Step 5: Commit**
+
+```
+refactor: remove dead API functions, move copy_dir_contents to util.rs
+```
+
+---
+
+## Task 13: Add `--branch` Flag and `TapInfo.branch`
+
+**Files:** `src/registry/models.rs`, `src/cli.rs`, `src/registry/tap.rs`
+
+- [ ] **Step 1: Add `branch` field to `TapInfo`**
+
+In `src/registry/models.rs`:
+```rust
+pub struct TapInfo {
+    pub url: String,
+    pub skills_path: String,
+    pub updated_at: Option<DateTime<Utc>>,
+    pub is_default: bool,
+    pub cached_registry: Option<TapRegistry>,
+    #[serde(default)]
+    pub branch: Option<String>,  // NEW — persists which branch was cloned
+}
+```
+
+No database migration needed — `#[serde(default)]` handles legacy db.json files.
+
+- [ ] **Step 2: Add `--branch` flag to CLI**
+
+In `src/cli.rs`, add to the `TapCommands::Add` variant:
+```rust
+TapCommands::Add {
+    url: String,
+    #[arg(short, long)]
+    branch: Option<String>,
+    // ... existing fields
+}
+```
+
+- [ ] **Step 3: Thread branch through `add_tap`**
+
+Update `add_tap` signature: `pub fn add_tap(url: &str, branch: Option<&str>, install: bool) -> Result<()>`
+
+Store the branch in `TapInfo` when creating the tap. Use it in `git_clone`.
+
+- [ ] **Step 4: Use stored branch in `update_single_tap`**
+
+When pulling or re-cloning, use `tap.branch.as_deref()` so the correct branch is maintained.
+
+- [ ] **Step 5: Display branch in `tap list`**
+
+If `tap.branch.is_some()`, show it in the tap list output (e.g., in the URL column: `https://github.com/org/repo [dev]`).
+
+- [ ] **Step 6: Write tests**
+
+- `test_tap_info_deserialize_without_branch` — legacy db.json → branch is None
+- `test_tap_info_serialize_roundtrip_with_branch`
+- `test_add_tap_with_branch` — clones correct branch
+
+- [ ] **Step 7: Commit**
+
+```
+feat: add --branch flag to tap add, persist branch in TapInfo
+```
+
+---
+
+## Task 14: Add `skillshub doctor` Command
+
+**Files:** `src/commands/doctor.rs`, `src/commands/mod.rs`, `src/cli.rs`, `src/main.rs`
+
+- [ ] **Step 1: Add CLI subcommand**
+
+In `cli.rs`:
+```rust
+Commands::Doctor,
+```
+
+Wire in `main.rs`:
+```rust
+Commands::Doctor => commands::doctor::run_doctor(),
+```
+
+- [ ] **Step 2: Implement `run_doctor()`**
+
+```rust
+pub fn run_doctor() -> Result<()> {
+    println!("{} Running diagnostics...\n", "=>".green().bold());
+    let mut issues = 0;
+
+    // 1. Git health
+    match super::super::registry::git::check_git() {
+        Ok(()) => println!("  {} git is installed", "✓".green()),
+        Err(e) => { println!("  {} git: {}", "✗".red(), e); issues += 1; }
+    }
+
+    // 2. Clone health — for each tap, verify clone dir
+    let db = db::init_db()?;
+    for (name, tap) in &db.taps {
+        if tap.url.contains("gist.github.com") { continue; }
+        let clone_dir = crate::paths::get_tap_clone_dir(name)?;
+        if !clone_dir.exists() {
+            println!("  {} tap '{}': clone directory missing", "✗".red(), name);
+            issues += 1;
+        } else if !clone_dir.join(".git").exists() {
+            println!("  {} tap '{}': .git directory missing (corrupted clone)", "✗".red(), name);
+            issues += 1;
+        } else {
+            // Quick rev-parse check
+            match super::super::registry::git::git_head_sha(&clone_dir) {
+                Ok(_) => println!("  {} tap '{}': clone healthy", "✓".green(), name),
+                Err(_) => { println!("  {} tap '{}': git rev-parse failed", "✗".red(), name); issues += 1; }
+            }
+        }
+    }
+
+    // 3. Skill health — for each installed skill, check files exist
+    let install_dir = crate::paths::get_skills_install_dir()?;
+    for (full_name, _) in &db.installed {
+        let parts: Vec<&str> = full_name.splitn(2, '/').collect();
+        if parts.len() == 2 {
+            let skill_dir = install_dir.join(parts[0]).join(parts[1]);
+            if !skill_dir.join("SKILL.md").exists() {
+                println!("  {} skill '{}': SKILL.md missing", "✗".red(), full_name);
+                issues += 1;
+            } else {
+                println!("  {} skill '{}': files present", "✓".green(), full_name);
+            }
+        }
+    }
+
+    // 4. Symlink health — check agent links
+    // (Implementation depends on agent detection — iterate known agent paths)
+
+    // 5. Orphan detection — clone dirs with no matching tap
+    let taps_dir = crate::paths::get_taps_clone_dir()?;
+    if taps_dir.exists() {
+        for owner_entry in std::fs::read_dir(&taps_dir)?.flatten() {
+            if owner_entry.path().is_dir() {
+                for repo_entry in std::fs::read_dir(owner_entry.path())?.flatten() {
+                    let tap_name = format!("{}/{}",
+                        owner_entry.file_name().to_string_lossy(),
+                        repo_entry.file_name().to_string_lossy());
+                    if !db.taps.contains_key(&tap_name) {
+                        println!("  {} orphan clone: {} (no matching tap in db)", "!".yellow(), tap_name);
+                        issues += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    println!();
+    if issues == 0 {
+        println!("{} All checks passed!", "✓".green().bold());
+    } else {
+        println!("{} {} issue(s) found", "!".yellow().bold(), issues);
+    }
+    Ok(())
+}
+```
+
+- [ ] **Step 3: Write tests**
+
+- `test_doctor_no_taps` — empty db → "All checks passed"
+- `test_doctor_healthy_clone` — valid clone → pass
+- `test_doctor_missing_clone` — tap exists, clone missing → reports issue
+- `test_doctor_missing_skill_files` — installed but SKILL.md gone → reports issue
+- `test_doctor_orphan_clone` — clone dir exists but no tap in db → warns
+
+- [ ] **Step 4: Commit**
+
+```
+feat: add skillshub doctor command for diagnostics
+```
+
+---
+
+## Task 15: Update Tests
+
+**Files:** `tests/common/mod.rs`, `tests/common/mock_github.rs`, various test modules
+
+- [ ] **Step 1: Create shared test helpers**
+
+In `tests/common/mod.rs` (or a new `src/test_helpers.rs` behind `#[cfg(test)]`):
+
+```rust
+use std::path::Path;
+use std::process::Command;
+use std::fs;
+
+/// Initialize a bare git repo with a single commit
+pub fn init_test_repo(dir: &Path) {
+    Command::new("git").args(["init"]).current_dir(dir).output().unwrap();
+    Command::new("git").args(["config", "user.email", "test@test.com"]).current_dir(dir).output().unwrap();
+    Command::new("git").args(["config", "user.name", "Test"]).current_dir(dir).output().unwrap();
+    fs::write(dir.join("README.md"), "# test").unwrap();
+    Command::new("git").args(["add", "."]).current_dir(dir).output().unwrap();
+    Command::new("git").args(["commit", "-m", "init"]).current_dir(dir).output().unwrap();
+}
+
+/// Initialize a git repo with a skill
+pub fn init_test_repo_with_skill(dir: &Path, skill_name: &str, description: &str) {
+    init_test_repo(dir);
+    let skill_dir = dir.join("skills").join(skill_name);
+    fs::create_dir_all(&skill_dir).unwrap();
+    fs::write(
+        skill_dir.join("SKILL.md"),
+        format!("---\nname: {}\ndescription: {}\n---\n# {}", skill_name, description, skill_name),
+    ).unwrap();
+    Command::new("git").args(["add", "."]).current_dir(dir).output().unwrap();
+    Command::new("git").args(["commit", "-m", "add skill"]).current_dir(dir).output().unwrap();
+}
+```
 
 - [ ] **Step 2: Remove unused mock helpers**
 
-In `tests/common/mock_github.rs`, remove mock helpers that are no longer needed:
+In `tests/common/mock_github.rs`, remove:
 - `mock_tree_response()` — no more tree API calls
 - `mock_tarball()` — no more tarball downloads
 - `mock_commits()` — no more commits API calls
 
-Keep mock helpers used by gist tests.
+Keep mock helpers used by gist and star-list tests.
 
-- [ ] **Step 3: Run full test suite**
+- [ ] **Step 3: Audit and update remaining tests**
 
-Run: `cargo test`
-Expected: all PASS
+Run: `grep -r "discover_skills_from_repo\|download_skill\|get_latest_commit\|get_default_branch\|install_from_remote" tests/`
 
-- [ ] **Step 4: Commit**
+Remove or update any tests that reference removed functions.
+
+- [ ] **Step 4: Run full test suite**
+
+```bash
+cargo test
+```
+
+- [ ] **Step 5: Commit**
 
 ```
 test: update tests for git-based tap management
@@ -1337,25 +750,13 @@ test: update tests for git-based tap management
 
 ---
 
-## Task 11: Update Documentation
+## Task 16: Update Documentation
 
-**Files:**
-- Modify: `README.md`
-- Modify: `docs/architecture.md`
+**Files:** `README.md`, `docs/architecture.md`, `CLAUDE.md`
 
-- [ ] **Step 1: Update README.md**
+- [ ] **Step 1: Update `docs/architecture.md`**
 
-Update the rate-limiting section to reflect that API calls are no longer the primary path:
-- `tap add` and `tap update` now use git, no API rate limits
-- Only gist imports and star list imports still use the GitHub API
-- `GITHUB_TOKEN` is only needed for gist/star-list operations
-- For private repos, configure git credential helpers or SSH keys (git clone uses system auth, not `GITHUB_TOKEN`)
-- The `@commit` specifier for `install` is no longer supported for non-gist taps
-- `skillshub add <url>` with branch/commit in URL now clones HEAD (not the specific commit)
-
-- [ ] **Step 2: Update `docs/architecture.md`**
-
-Add section about the taps directory structure:
+Add taps directory structure:
 ```
 ~/.skillshub/
 ├── db.json
@@ -1374,12 +775,27 @@ Add section about the taps directory structure:
 ```
 
 Document the new flow: clone-based add, pull-based update, copy-based install.
+Add section on `skillshub doctor`.
 
-- [ ] **Step 3: Move this plan to `docs/plans/`**
+- [ ] **Step 2: Update `README.md`**
+
+- `tap add` and `tap update` use git — no API rate limits
+- Only gist/star-list operations use GitHub API
+- `GITHUB_TOKEN` only needed for gist/star-list
+- Private repos: configure git credential helpers or SSH keys
+- `@commit` no longer supported for non-gist taps
+- New `--branch` flag for `tap add`
+- New `skillshub doctor` command
+
+- [ ] **Step 3: Update `CLAUDE.md`**
+
+Add `doctor` to the "Testing locally" section. Update any references to API-based operations.
+
+- [ ] **Step 4: Move this plan to `docs/`**
 
 Per CLAUDE.md: "After the plan is fully implemented, rewrite it as a design doc in `docs/`, and remove it from `plans/`."
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```
 docs: update for git-based tap management
@@ -1389,28 +805,33 @@ docs: update for git-based tap management
 
 ## Summary of Changes
 
-| Operation | Before (API) | After (Git) |
+| Operation | Before (Hybrid) | After (Git-only) |
 |---|---|---|
-| `tap add` | Tree API → discover SKILL.md files | `git clone --depth 1` → walk filesystem |
-| `tap update` | Tree API → re-discover skills | `git pull` → re-walk filesystem |
-| `tap remove` | Remove db entry only | Remove db entry + delete clone |
-| `install` | Download tarball → extract | Copy from local clone |
-| `update` (skill) | Commits API → compare SHA → download tarball | `git pull` → compare HEAD → copy |
-| `add` (URL) | Download tarball | Ensure clone → copy |
-| Gist operations | GitHub API (unchanged) | GitHub API (unchanged) |
-| Star list | GraphQL API (unchanged) | GraphQL API (unchanged) |
+| `tap add` | git clone (gist: API) | git clone with --branch (gist: API) |
+| `tap update` | git pull (gist: API) | pull_or_reclone with branch (gist: API) |
+| `tap remove` | Remove db + clone | Same |
+| `install` | Clone → API fallback | Clone only (ensure_clone) |
+| `update` (skill) | Clone → API fallback | Clone only (pull_or_reclone) |
+| `add` (URL) | API tarball download | Ensure clone → copy |
+| `@commit` (non-gist) | API tarball at commit | **Hard error** |
+| Gist operations | GitHub API | Same |
+| Star list | GraphQL API | Same |
+| **New: `doctor`** | — | Git + clone + skill + symlink health |
+| **New: `--branch`** | — | Clone specific branch, persist in TapInfo |
 
-**New dependency:** `walkdir` crate (for recursive directory scanning)
-
-**Removed dependencies:** `flate2`, `tar` (moved to dev-deps or removed); `tempfile` moved to `[dev-dependencies]`
+**Added dependency:** `walkdir`
+**Removed dependencies:** `flate2`, `tar`
+**Kept:** `reqwest` (gist API, star-list GraphQL)
 
 ## GSTACK REVIEW REPORT
 
 | Review | Trigger | Why | Runs | Status | Findings |
 |--------|---------|-----|------|--------|----------|
-| CEO Review | `/plan-ceo-review` | Scope & strategy | 1 | CLEAR | 5 cherry-picks accepted, 7 issues found and resolved, mode: SELECTIVE_EXPANSION |
-| Codex Review | `/codex review` | Independent 2nd opinion | 0 | — | — |
-| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 0 | — | — |
+| CEO Review | `/plan-ceo-review` | Scope & strategy | 1 | CLEAR | 6 proposals, 5 accepted, 1 deferred |
+| Codex Review | `/codex review` | Independent 2nd opinion | 1 | CLEAR | 10 findings, 2 new (registry cache, discovery scope) |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | CLEAR | 5 issues, 0 critical gaps |
 | Design Review | `/plan-design-review` | UI/UX gaps | 0 | — | — |
 
-**VERDICT:** CEO CLEARED — eng review required before implementation.
+**CODEX:** Found composability gap (add_skill_from_url + update) and discovery validation weakness (test fixtures, duplicates). Both fixed.
+**UNRESOLVED:** 0
+**VERDICT:** CEO + ENG + CODEX CLEARED — ready to implement.
