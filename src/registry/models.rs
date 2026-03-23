@@ -148,6 +148,7 @@ impl GitHubUrl {
     }
 
     /// Check if the branch looks like a commit SHA (40 hex chars or 7+ hex prefix)
+    #[allow(dead_code)] // Used in tests; production caller removed in git-control refactor
     pub fn is_commit_sha(&self) -> bool {
         self.branch
             .as_ref()

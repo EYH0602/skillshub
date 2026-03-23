@@ -7,7 +7,7 @@ use tabled::{
 };
 
 use super::db::{self, DEFAULT_TAP_NAME};
-use super::git::{git_head_sha, git_pull, tap_clone_path};
+use super::git::{ensure_clone, git_head_sha, git_pull, tap_clone_path};
 use super::github::{
     copy_dir_contents, discover_skills_from_gist, download_skill, fetch_gist, get_default_branch, get_latest_commit,
     is_gist_url, parse_gist_url, parse_github_url,
@@ -15,7 +15,7 @@ use super::github::{
 use super::models::{InstalledSkill, SkillId};
 use super::tap::get_tap_registry;
 use crate::commands::link_to_agents;
-use crate::paths::{get_embedded_skills_dir, get_skills_install_dir, get_taps_clone_dir};
+use crate::paths::{get_embedded_skills_dir, get_skills_install_dir, get_tap_clone_dir, get_taps_clone_dir};
 use crate::skill::{discover_skills, parse_skill_metadata};
 use crate::util::truncate_string;
 
@@ -212,28 +212,39 @@ pub fn add_skill_from_url(url: &str) -> Result<()> {
 
     println!("{} Adding '{}' from {}", "=>".green().bold(), full_name, url);
 
-    // Determine commit to use (if branch looks like a commit SHA, use it as the commit)
-    let commit = if github_url.is_commit_sha() {
-        github_url.branch.clone()
-    } else {
-        None
-    };
+    // Ensure tap clone exists
+    let base_url = github_url.base_url();
+    let clone_dir = get_tap_clone_dir(&tap_name)?;
+    ensure_clone(&clone_dir, &base_url, github_url.branch.as_deref())?;
 
     let dest = install_dir.join(&tap_name).join(&skill_name);
     std::fs::create_dir_all(&dest)?;
 
-    // Download the skill
-    let commit_sha = download_skill(&github_url, skill_path, &dest, commit.as_deref())?;
+    // Copy from clone with path containment check
+    let source = clone_dir.join(skill_path);
+    let canonical_source = source
+        .canonicalize()
+        .with_context(|| format!("Skill path '{}' not found in repository", skill_path))?;
+    let canonical_clone = clone_dir.canonicalize()?;
+    if !canonical_source.starts_with(&canonical_clone) {
+        anyhow::bail!("Skill path escapes clone directory");
+    }
+    if !canonical_source.join("SKILL.md").exists() {
+        anyhow::bail!("No SKILL.md found at '{}'", skill_path);
+    }
+    copy_dir_contents(&source, &dest)?;
 
-    // Add tap if it doesn't exist
+    let commit_sha = super::git::git_head_sha(&clone_dir)?;
+
+    // Populate cached_registry so `update` works without manual `tap update`
     if db::get_tap(&db, &tap_name).is_none() {
-        let tap_url = format!("https://github.com/{}/{}", github_url.owner, github_url.repo);
+        let registry = super::tap::discover_skills_from_local(&clone_dir, &tap_name).ok(); // Non-fatal: registry cache is a convenience
         let tap_info = super::models::TapInfo {
-            url: tap_url,
+            url: base_url,
             skills_path: "skills".to_string(),
             updated_at: Some(Utc::now()),
             is_default: false,
-            cached_registry: None, // Cache will be populated on next tap update
+            cached_registry: registry,
         };
         db::add_tap(&mut db, &tap_name, tap_info);
     }
