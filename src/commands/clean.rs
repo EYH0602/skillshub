@@ -194,6 +194,10 @@ fn clean_all_with_input(confirm: bool, input: &mut impl BufRead) -> Result<()> {
             println!("      {} ({})", agent_name, display_path_with_tilde(&skills_path));
         }
         println!("  - Installed skills: {}", display_path_with_tilde(&skills_dir));
+        println!(
+            "  - Cloned taps: {}",
+            display_path_with_tilde(&skillshub_home.join("taps"))
+        );
         println!("  - Database: {}", display_path_with_tilde(&db_path));
         println!(
             "  - Skillshub home directory: {}",

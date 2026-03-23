@@ -569,6 +569,91 @@ fn parse_skill_md_content(content: &str) -> Option<(String, Option<String>)> {
     Some((metadata.name, metadata.description))
 }
 
+/// Discover skills from a local repository clone by walking the filesystem for SKILL.md files.
+///
+/// This is the local equivalent of `discover_skills_from_repo` -- it walks the directory
+/// tree instead of using the GitHub Tree API.
+pub fn discover_skills_from_local(repo_path: &Path, tap_name: &str) -> Result<TapRegistry> {
+    let mut skills = HashMap::new();
+
+    walk_dir_for_skills(repo_path, repo_path, &mut skills)?;
+
+    if skills.is_empty() {
+        anyhow::bail!("No skills found in local clone (no SKILL.md files detected)");
+    }
+
+    Ok(TapRegistry {
+        name: tap_name.to_string(),
+        description: Some(format!("Skills from {}", tap_name)),
+        skills,
+    })
+}
+
+/// Recursively walk a directory looking for SKILL.md files, skipping .git directories.
+fn walk_dir_for_skills(dir: &Path, repo_root: &Path, skills: &mut HashMap<String, SkillEntry>) -> Result<()> {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(_) => return Ok(()),
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+
+        if path.is_dir() {
+            // Skip .git directory
+            if path.file_name().map(|n| n == ".git").unwrap_or(false) {
+                continue;
+            }
+            walk_dir_for_skills(&path, repo_root, skills)?;
+        } else if path.file_name().map(|n| n == "SKILL.md").unwrap_or(false) {
+            let skill_dir = path.parent().unwrap_or(repo_root);
+
+            // Compute relative path from repo root to the skill directory
+            let rel_path = skill_dir
+                .strip_prefix(repo_root)
+                .unwrap_or(std::path::Path::new(""))
+                .to_string_lossy()
+                .to_string();
+
+            // Read and parse SKILL.md
+            if let Ok(content) = fs::read_to_string(&path) {
+                if let Some((name, description)) = parse_skill_md_content(&content) {
+                    if is_safe_skill_name(&name) {
+                        skills.insert(
+                            name,
+                            SkillEntry {
+                                path: rel_path,
+                                description,
+                                homepage: None,
+                            },
+                        );
+                        continue;
+                    }
+                }
+            }
+
+            // Fallback: use directory name
+            let skill_name = skill_dir
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+
+            if !skill_name.is_empty() && is_safe_skill_name(&skill_name) {
+                skills.insert(
+                    skill_name,
+                    SkillEntry {
+                        path: rel_path,
+                        description: None,
+                        homepage: None,
+                    },
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Get the latest commit SHA for a path in a repository
 pub fn get_latest_commit(github_url: &GitHubUrl, path: Option<&str>, resolved_branch: &str) -> Result<String> {
     let client = build_client()?;
@@ -697,9 +782,18 @@ fn extract_skill_paths(tree: &[TreeEntry]) -> Vec<String> {
 }
 
 /// Recursively copy directory contents
+///
+/// Symlinks are skipped as a defense-in-depth measure to prevent a malicious
+/// cloned repo from including symlinks that point outside the clone directory.
 pub(crate) fn copy_dir_contents(src: &Path, dst: &Path) -> Result<()> {
     for entry in fs::read_dir(src)? {
         let entry = entry?;
+
+        // Skip symlinks to avoid following links that escape the source tree
+        if entry.file_type()?.is_symlink() {
+            continue;
+        }
+
         let src_path = entry.path();
         let dst_path = dst.join(entry.file_name());
 
@@ -2157,5 +2251,192 @@ name: minimal-skill
         assert!(names.contains(&"skill-two"));
 
         std::env::remove_var("SKILLSHUB_GITHUB_API_BASE");
+    }
+
+    #[test]
+    fn test_discover_skills_from_local() {
+        let temp = tempfile::TempDir::new().unwrap();
+
+        // Create skill directories with SKILL.md files
+        let skill_a = temp.path().join("skills").join("skill-a");
+        let skill_b = temp.path().join("other").join("nested").join("skill-b");
+        std::fs::create_dir_all(&skill_a).unwrap();
+        std::fs::create_dir_all(&skill_b).unwrap();
+
+        std::fs::write(
+            skill_a.join("SKILL.md"),
+            "---\nname: skill-a\ndescription: First skill\n---\nContent",
+        )
+        .unwrap();
+        std::fs::write(
+            skill_b.join("SKILL.md"),
+            "---\nname: skill-b\ndescription: Second skill\n---\nContent",
+        )
+        .unwrap();
+
+        let registry = discover_skills_from_local(temp.path(), "test/tap").unwrap();
+        assert_eq!(registry.skills.len(), 2);
+        assert!(registry.skills.contains_key("skill-a"));
+        assert!(registry.skills.contains_key("skill-b"));
+
+        // Verify paths are relative
+        let entry_a = registry.skills.get("skill-a").unwrap();
+        assert_eq!(entry_a.path, "skills/skill-a");
+        assert_eq!(entry_a.description, Some("First skill".to_string()));
+
+        let entry_b = registry.skills.get("skill-b").unwrap();
+        assert_eq!(entry_b.path, "other/nested/skill-b");
+    }
+
+    #[test]
+    fn test_discover_skills_from_local_skips_git_dir() {
+        let temp = tempfile::TempDir::new().unwrap();
+
+        // Create a .git directory with a fake SKILL.md (should be skipped)
+        let git_dir = temp.path().join(".git").join("hooks");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        std::fs::write(
+            temp.path().join(".git").join("SKILL.md"),
+            "---\nname: should-be-skipped\n---\nContent",
+        )
+        .unwrap();
+
+        // Create a real skill
+        let skill_dir = temp.path().join("skills").join("real-skill");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: real-skill\ndescription: A real skill\n---\nContent",
+        )
+        .unwrap();
+
+        let registry = discover_skills_from_local(temp.path(), "test/tap").unwrap();
+        assert_eq!(registry.skills.len(), 1);
+        assert!(registry.skills.contains_key("real-skill"));
+        assert!(!registry.skills.contains_key("should-be-skipped"));
+    }
+
+    #[test]
+    fn test_discover_skills_from_local_empty_repo() {
+        let temp = tempfile::TempDir::new().unwrap();
+        // No SKILL.md files
+        std::fs::create_dir_all(temp.path().join("src")).unwrap();
+
+        let result = discover_skills_from_local(temp.path(), "test/tap");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("No skills found"));
+    }
+
+    #[test]
+    fn test_discover_skills_from_local_fallback_to_dirname() {
+        let temp = tempfile::TempDir::new().unwrap();
+
+        // Create a SKILL.md without valid YAML frontmatter
+        let skill_dir = temp.path().join("my-skill");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(skill_dir.join("SKILL.md"), "# No frontmatter here").unwrap();
+
+        let registry = discover_skills_from_local(temp.path(), "test/tap").unwrap();
+        assert_eq!(registry.skills.len(), 1);
+        assert!(registry.skills.contains_key("my-skill"));
+    }
+
+    #[test]
+    fn test_walk_dir_for_skills_skips_malicious_frontmatter_name() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let skill_dir = temp.path().join("legit-dir");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+
+        // SKILL.md with a path-traversal name in the YAML frontmatter
+        let content = "---\nname: ../../../pwned\ndescription: malicious\n---\n# Evil Skill\n";
+        std::fs::write(skill_dir.join("SKILL.md"), content).unwrap();
+
+        let mut skills = HashMap::new();
+        walk_dir_for_skills(temp.path(), temp.path(), &mut skills).unwrap();
+
+        // The frontmatter name "../../../pwned" must be rejected.
+        // The fallback directory name "legit-dir" is safe, so it should be used instead.
+        assert!(
+            !skills.contains_key("../../../pwned"),
+            "path-traversal name from frontmatter must be rejected"
+        );
+        assert!(
+            skills.contains_key("legit-dir"),
+            "safe fallback directory name should be accepted"
+        );
+    }
+
+    #[test]
+    fn test_walk_dir_for_skills_skips_malicious_directory_name() {
+        let temp = tempfile::TempDir::new().unwrap();
+
+        // Use a name that contains ".." as a substring which is rejected by is_safe_skill_name.
+        let evil_dir = temp.path().join("..hidden");
+        std::fs::create_dir_all(&evil_dir).unwrap();
+
+        // SKILL.md with no valid frontmatter so the fallback (directory name) path is used
+        std::fs::write(evil_dir.join("SKILL.md"), "# No frontmatter").unwrap();
+
+        let mut skills = HashMap::new();
+        walk_dir_for_skills(temp.path(), temp.path(), &mut skills).unwrap();
+
+        // "..hidden" contains ".." and must be rejected by is_safe_skill_name
+        assert!(
+            !skills.contains_key("..hidden"),
+            "directory name containing '..' must be rejected"
+        );
+        assert!(
+            skills.is_empty(),
+            "no skills should be inserted for unsafe directory names"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_copy_dir_contents_skips_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::TempDir::new().unwrap();
+        let src = temp.path().join("src");
+        let dst = temp.path().join("dst");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(&dst).unwrap();
+
+        // Create a regular file
+        std::fs::write(src.join("real.txt"), "real content").unwrap();
+
+        // Create a subdirectory with a file
+        let subdir = src.join("subdir");
+        std::fs::create_dir_all(&subdir).unwrap();
+        std::fs::write(subdir.join("nested.txt"), "nested content").unwrap();
+
+        // Create a symlink to a file outside the source tree
+        let outside = temp.path().join("outside.txt");
+        std::fs::write(&outside, "outside content").unwrap();
+        symlink(&outside, src.join("link-to-file")).unwrap();
+
+        // Create a symlink to a directory outside the source tree
+        let outside_dir = temp.path().join("outside-dir");
+        std::fs::create_dir_all(&outside_dir).unwrap();
+        std::fs::write(outside_dir.join("secret.txt"), "secret").unwrap();
+        symlink(&outside_dir, src.join("link-to-dir")).unwrap();
+
+        // Run copy
+        copy_dir_contents(&src, &dst).unwrap();
+
+        // Regular file and subdirectory should be copied
+        assert!(dst.join("real.txt").exists(), "regular file should be copied");
+        assert_eq!(std::fs::read_to_string(dst.join("real.txt")).unwrap(), "real content");
+        assert!(
+            dst.join("subdir").join("nested.txt").exists(),
+            "nested file should be copied"
+        );
+
+        // Symlinks should NOT be copied
+        assert!(!dst.join("link-to-file").exists(), "symlink to file should be skipped");
+        assert!(
+            !dst.join("link-to-dir").exists(),
+            "symlink to directory should be skipped"
+        );
     }
 }

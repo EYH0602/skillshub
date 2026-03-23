@@ -1,4 +1,5 @@
 pub mod db;
+pub mod git;
 pub mod github;
 pub mod migration;
 pub mod models;
