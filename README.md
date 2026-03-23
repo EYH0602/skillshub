@@ -1,3 +1,5 @@
+[![CI](https://github.com/EYH0602/skillshub/actions/workflows/ci.yml/badge.svg)](https://github.com/EYH0602/skillshub/actions/workflows/ci.yml)
+
 # Skillshub
 
 Skillshub is a package manager for AI coding agent skills - like Homebrew for skills.
