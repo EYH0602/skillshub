@@ -26,7 +26,6 @@ pub fn get_taps_clone_dir() -> Result<PathBuf> {
 }
 
 /// Get the clone directory for a specific tap (~/.skillshub/taps/owner/repo)
-#[allow(dead_code)]
 pub fn get_tap_clone_dir(tap_name: &str) -> Result<PathBuf> {
     let taps_dir = get_taps_clone_dir()?;
     Ok(crate::registry::git::tap_clone_path(&taps_dir, tap_name))
