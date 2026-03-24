@@ -7,9 +7,10 @@ mod skill;
 mod util;
 
 use anyhow::Result;
-use clap::Parser;
+use clap::{CommandFactory, Parser};
+use clap_complete::{generate, Shell as ClapShell};
 
-use cli::{CleanCommands, Cli, Commands, ExternalCommands, TapCommands};
+use cli::{CleanCommands, Cli, Commands, ExternalCommands, Shell, TapCommands};
 use commands::{
     clean_all, clean_cache, clean_links, external_forget, external_list, external_scan, link_to_agents, show_agents,
 };
@@ -60,6 +61,15 @@ fn main() -> Result<()> {
             commands::doctor::run_doctor()?;
         }
         Commands::Migrate => migrate_old_installations()?,
+        Commands::Completions { shell } => {
+            let clap_shell = match shell {
+                Shell::Bash => ClapShell::Bash,
+                Shell::Zsh => ClapShell::Zsh,
+                Shell::Fish => ClapShell::Fish,
+            };
+            let mut cmd = Cli::command();
+            generate(clap_shell, &mut cmd, "skillshub", &mut std::io::stdout());
+        }
     }
 
     Ok(())
