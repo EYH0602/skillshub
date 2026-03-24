@@ -68,6 +68,16 @@ impl<'de> Deserialize<'de> for AllowedTools {
     }
 }
 
+/// Check whether a skill directory contains a `scripts/` subdirectory.
+pub fn has_scripts_dir(skill_dir: &Path) -> bool {
+    skill_dir.join("scripts").exists()
+}
+
+/// Check whether a skill directory contains a `references/` or `resources/` subdirectory.
+pub fn has_references_dir(skill_dir: &Path) -> bool {
+    skill_dir.join("references").exists() || skill_dir.join("resources").exists()
+}
+
 /// Represents a discovered skill
 #[derive(Debug, Clone)]
 pub struct Skill {
@@ -122,8 +132,8 @@ pub fn discover_skills(skills_dir: &Path) -> Result<Vec<Skill>> {
 
         match parse_skill_metadata(&skill_md) {
             Ok(metadata) => {
-                let has_scripts = path.join("scripts").exists();
-                let has_references = path.join("references").exists() || path.join("resources").exists();
+                let has_scripts = has_scripts_dir(&path);
+                let has_references = has_references_dir(&path);
 
                 skills.push(Skill {
                     name: metadata.name,

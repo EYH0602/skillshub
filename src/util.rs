@@ -131,33 +131,41 @@ mod tests {
 
     /// Verify that the `colored` crate suppresses ANSI escape codes when
     /// the `NO_COLOR` environment variable is set (per <https://no-color.org>).
+    ///
+    /// The global `SHOULD_COLORIZE` is a lazy_static that reads the environment
+    /// once at initialization and caches the result. Setting `NO_COLOR` after
+    /// that has no effect on the cached value. To test the env-var logic
+    /// without `set_override` (which bypasses the env var entirely), we
+    /// construct a fresh `ShouldColorize::from_env()` with `NO_COLOR` set
+    /// and verify that `should_colorize()` returns false.
     #[test]
     #[serial]
     fn test_no_color_env_suppresses_ansi_codes() {
-        use colored::Colorize;
+        // Save previous env state
+        let prev_no_color = std::env::var("NO_COLOR").ok();
+        let prev_clicolor_force = std::env::var("CLICOLOR_FORCE").ok();
 
-        // Save and set NO_COLOR
-        let prev = std::env::var("NO_COLOR").ok();
+        // Set NO_COLOR and clear CLICOLOR_FORCE (which would take priority)
         std::env::set_var("NO_COLOR", "1");
+        std::env::remove_var("CLICOLOR_FORCE");
 
-        // The colored crate caches its color-support decision, so we need
-        // to explicitly tell it to re-check the environment.
-        colored::control::set_override(false);
+        // Build a fresh ShouldColorize from the current environment.
+        // This reads NO_COLOR at construction time, unlike the global
+        // lazy_static which only reads it once.
+        let should = colored::control::ShouldColorize::from_env();
+        assert!(
+            !should.should_colorize(),
+            "ShouldColorize::from_env() should return false when NO_COLOR=1 is set"
+        );
 
-        let green_text = "success".green().to_string();
-        let bold_text = "bold".bold().to_string();
-        let red_text = "error".red().to_string();
-
-        // With color disabled, the output should be plain text (no escape codes)
-        assert_eq!(green_text, "success", "green() should produce plain text when NO_COLOR is set");
-        assert_eq!(bold_text, "bold", "bold() should produce plain text when NO_COLOR is set");
-        assert_eq!(red_text, "error", "red() should produce plain text when NO_COLOR is set");
-
-        // Restore previous state
-        colored::control::unset_override();
-        match prev {
+        // Restore previous env state
+        match prev_no_color {
             Some(v) => std::env::set_var("NO_COLOR", v),
             None => std::env::remove_var("NO_COLOR"),
+        }
+        match prev_clicolor_force {
+            Some(v) => std::env::set_var("CLICOLOR_FORCE", v),
+            None => {} // was already absent, leave it absent
         }
     }
 }

@@ -13,7 +13,7 @@ use super::models::{InstalledSkill, SkillId};
 use super::tap::get_tap_registry;
 use crate::commands::link_to_agents;
 use crate::paths::{get_embedded_skills_dir, get_skills_install_dir, get_tap_clone_dir, get_taps_clone_dir};
-use crate::skill::{discover_skills, parse_skill_metadata};
+use crate::skill::{discover_skills, has_references_dir, has_scripts_dir, parse_skill_metadata};
 use crate::util::{copy_dir_contents, truncate_string};
 
 const DESCRIPTION_MAX_LEN: usize = 50;
@@ -691,10 +691,7 @@ pub fn list_skills() -> Result<()> {
             let extras = if installed.is_some() {
                 if let Ok(idir) = get_skills_install_dir() {
                     let skill_dir = idir.join(tap_name).join(skill_name);
-                    let has_scripts = skill_dir.join("scripts").exists();
-                    let has_refs = skill_dir.join("references").exists()
-                        || skill_dir.join("resources").exists();
-                    format_extras(has_scripts, has_refs)
+                    format_extras(has_scripts_dir(&skill_dir), has_references_dir(&skill_dir))
                 } else {
                     "-".to_string()
                 }
@@ -736,16 +733,13 @@ pub fn list_skills() -> Result<()> {
         };
 
         let skill_dir = install_dir.join(&installed.tap).join(&installed.skill);
-        let has_scripts = skill_dir.join("scripts").exists();
-        let has_refs = skill_dir.join("references").exists()
-            || skill_dir.join("resources").exists();
 
         rows.push(SkillListRow {
             status: "✓",
             name: installed.skill.clone(),
             tap: installed.tap.clone(),
             description: truncate_string(&description, DESCRIPTION_MAX_LEN),
-            extras: format_extras(has_scripts, has_refs),
+            extras: format_extras(has_scripts_dir(&skill_dir), has_references_dir(&skill_dir)),
             commit: installed.commit.clone().unwrap_or_else(|| "-".to_string()),
         });
     }
@@ -817,10 +811,7 @@ pub fn search_skills(query: &str) -> Result<()> {
                 let extras = if installed.is_some() {
                     if let Ok(idir) = get_skills_install_dir() {
                         let skill_dir = idir.join(tap_name).join(skill_name);
-                        let has_scripts = skill_dir.join("scripts").exists();
-                        let has_refs = skill_dir.join("references").exists()
-                            || skill_dir.join("resources").exists();
-                        format_extras(has_scripts, has_refs)
+                        format_extras(has_scripts_dir(&skill_dir), has_references_dir(&skill_dir))
                     } else {
                         "-".to_string()
                     }
@@ -974,13 +965,10 @@ pub fn show_skill_info(full_name: &str) -> Result<()> {
             }
             None => {
                 // Fallback to direct filesystem check
-                let has_scripts = skill_dir.join("scripts").exists();
-                let has_references = skill_dir.join("references").exists()
-                    || skill_dir.join("resources").exists();
                 println!(
                     "  {}: {}",
                     "Scripts".cyan(),
-                    if has_scripts {
+                    if has_scripts_dir(&skill_dir) {
                         "Yes".green().to_string()
                     } else {
                         "No".to_string()
@@ -989,7 +977,7 @@ pub fn show_skill_info(full_name: &str) -> Result<()> {
                 println!(
                     "  {}: {}",
                     "References".cyan(),
-                    if has_references {
+                    if has_references_dir(&skill_dir) {
                         "Yes".green().to_string()
                     } else {
                         "No".to_string()
@@ -1226,5 +1214,25 @@ mod tests {
             entries.is_empty(),
             "destination should be empty after copying empty source"
         );
+    }
+
+    #[test]
+    fn test_format_extras_neither() {
+        assert_eq!(format_extras(false, false), "-");
+    }
+
+    #[test]
+    fn test_format_extras_scripts_only() {
+        assert_eq!(format_extras(true, false), "scripts");
+    }
+
+    #[test]
+    fn test_format_extras_refs_only() {
+        assert_eq!(format_extras(false, true), "refs");
+    }
+
+    #[test]
+    fn test_format_extras_both() {
+        assert_eq!(format_extras(true, true), "scripts, refs");
     }
 }
