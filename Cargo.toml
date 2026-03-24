@@ -2,7 +2,7 @@
 name = "skillshub"
 version = "0.3.0"
 edition = "2021"
-rust-version = "1.70.0"
+rust-version = "1.74.0"
 description = "A package manager for AI coding agent skills - like homebrew for skills"
 authors = ["Yifeng He <yfhe.cs@gmail.com>"]
 license = "MIT"
@@ -18,6 +18,9 @@ exclude = [
   "docs/plans/",
   "plans/",
   "setup.sh",
+  "AGENTS.md",
+  "CLAUDE.md",
+  "rustfmt.toml",
 ]
 
 [[bin]]
