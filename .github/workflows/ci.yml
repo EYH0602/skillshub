@@ -12,6 +12,7 @@ on:
 
 jobs:
     ci:
+        if: github.event_name != 'schedule'
         runs-on: ubuntu-latest
         steps:
             - name: Checkout
