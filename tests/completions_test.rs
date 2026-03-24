@@ -66,8 +66,5 @@ fn test_completions_invalid_shell_fails() {
         .output()
         .expect("failed to run skillshub completions");
 
-    assert!(
-        !output.status.success(),
-        "invalid shell should cause a non-zero exit"
-    );
+    assert!(!output.status.success(), "invalid shell should cause a non-zero exit");
 }
