@@ -76,7 +76,7 @@ pub fn link_to_agents() -> Result<()> {
                 } else {
                     println!(
                         "  {} {} ({} exists but is not managed by skillshub)",
-                        "!".red(),
+                        "!".yellow(),
                         agent_name,
                         agent.skills_subdir
                     );
@@ -85,7 +85,7 @@ pub fn link_to_agents() -> Result<()> {
             } else if !link_path.is_dir() {
                 println!(
                     "  {} {} ({} exists but is not a directory)",
-                    "!".red(),
+                    "!".yellow(),
                     agent_name,
                     agent.skills_subdir
                 );

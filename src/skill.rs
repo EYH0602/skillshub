@@ -74,9 +74,7 @@ pub struct Skill {
     pub name: String,
     pub description: String,
     pub path: PathBuf,
-    #[allow(dead_code)]
     pub has_scripts: bool,
-    #[allow(dead_code)]
     pub has_references: bool,
 }
 

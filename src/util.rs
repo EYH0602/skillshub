@@ -39,6 +39,7 @@ pub fn copy_dir_contents(src: &Path, dst: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     #[test]
     fn test_truncate_string() {
@@ -126,5 +127,37 @@ mod tests {
             !dst.join("link-to-dir").exists(),
             "symlink to directory should be skipped"
         );
+    }
+
+    /// Verify that the `colored` crate suppresses ANSI escape codes when
+    /// the `NO_COLOR` environment variable is set (per <https://no-color.org>).
+    #[test]
+    #[serial]
+    fn test_no_color_env_suppresses_ansi_codes() {
+        use colored::Colorize;
+
+        // Save and set NO_COLOR
+        let prev = std::env::var("NO_COLOR").ok();
+        std::env::set_var("NO_COLOR", "1");
+
+        // The colored crate caches its color-support decision, so we need
+        // to explicitly tell it to re-check the environment.
+        colored::control::set_override(false);
+
+        let green_text = "success".green().to_string();
+        let bold_text = "bold".bold().to_string();
+        let red_text = "error".red().to_string();
+
+        // With color disabled, the output should be plain text (no escape codes)
+        assert_eq!(green_text, "success", "green() should produce plain text when NO_COLOR is set");
+        assert_eq!(bold_text, "bold", "bold() should produce plain text when NO_COLOR is set");
+        assert_eq!(red_text, "error", "red() should produce plain text when NO_COLOR is set");
+
+        // Restore previous state
+        colored::control::unset_override();
+        match prev {
+            Some(v) => std::env::set_var("NO_COLOR", v),
+            None => std::env::remove_var("NO_COLOR"),
+        }
     }
 }
