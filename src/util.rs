@@ -163,9 +163,8 @@ mod tests {
             Some(v) => std::env::set_var("NO_COLOR", v),
             None => std::env::remove_var("NO_COLOR"),
         }
-        match prev_clicolor_force {
-            Some(v) => std::env::set_var("CLICOLOR_FORCE", v),
-            None => {} // was already absent, leave it absent
+        if let Some(v) = prev_clicolor_force {
+            std::env::set_var("CLICOLOR_FORCE", v);
         }
     }
 }

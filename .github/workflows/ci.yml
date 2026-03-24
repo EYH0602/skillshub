@@ -7,11 +7,12 @@ on:
     pull_request:
         branches:
             - main
+            - release/1.0.0
     schedule:
         - cron: '0 8 * * 1'
 
 jobs:
-    ci:
+    lint:
         if: github.event_name != 'schedule'
         runs-on: ubuntu-latest
         steps:
@@ -36,6 +37,22 @@ jobs:
 
             - name: Clippy
               run: cargo clippy --all-targets --all-features -- -D warnings
+
+    test:
+        if: github.event_name != 'schedule'
+        runs-on: ${{ matrix.os }}
+        strategy:
+            matrix:
+                os: [ubuntu-latest, macos-latest]
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Install Rust toolchain
+              uses: dtolnay/rust-toolchain@stable
+
+            - name: Rust cache
+              uses: Swatinem/rust-cache@v2
 
             - name: Tests
               run: cargo test --all-features
