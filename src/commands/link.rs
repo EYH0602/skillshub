@@ -9,7 +9,7 @@ use crate::agent::{discover_agents, known_agent_names, AgentInfo};
 use crate::paths::get_skills_install_dir;
 use crate::registry::db::{add_external_skill, init_db, is_external_skill, save_db};
 use crate::registry::models::{Database, ExternalSkill};
-use crate::skill::Skill;
+use crate::skill::{has_references_dir, has_scripts_dir, Skill};
 
 /// Link installed skills to all discovered coding agents
 pub fn link_to_agents() -> Result<()> {
@@ -76,7 +76,7 @@ pub fn link_to_agents() -> Result<()> {
                 } else {
                     println!(
                         "  {} {} ({} exists but is not managed by skillshub)",
-                        "!".red(),
+                        "!".yellow(),
                         agent_name,
                         agent.skills_subdir
                     );
@@ -85,7 +85,7 @@ pub fn link_to_agents() -> Result<()> {
             } else if !link_path.is_dir() {
                 println!(
                     "  {} {} ({} exists but is not a directory)",
-                    "!".red(),
+                    "!".yellow(),
                     agent_name,
                     agent.skills_subdir
                 );
@@ -292,8 +292,8 @@ fn collect_installed_skills(skills_dir: &Path) -> Result<Vec<Skill>> {
                 // Found a skill directory
                 match crate::skill::parse_skill_metadata(&skill_md) {
                     Ok(metadata) => {
-                        let has_scripts = path.join("scripts").exists();
-                        let has_references = path.join("references").exists() || path.join("resources").exists();
+                        let has_scripts = has_scripts_dir(&path);
+                        let has_references = has_references_dir(&path);
 
                         skills.push(Skill {
                             name: metadata.name,

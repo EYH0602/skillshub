@@ -4,7 +4,10 @@ use colored::Colorize;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use tabled::{settings::Style, Table, Tabled};
+use tabled::{
+    settings::{Padding, Style},
+    Table, Tabled,
+};
 
 use crate::agent::{discover_agents, AgentInfo};
 use crate::paths::get_skills_install_dir;
@@ -53,7 +56,10 @@ pub fn external_list() -> Result<()> {
 
     rows.sort_by(|a, b| a.name.cmp(&b.name));
 
-    let table = Table::new(rows).with(Style::rounded()).to_string();
+    let table = Table::new(rows)
+        .with(Style::rounded())
+        .with(Padding::new(1, 1, 0, 1))
+        .to_string();
     println!("{}", table);
 
     Ok(())
