@@ -39,4 +39,3 @@ serial_test = "3.0"
 strip = true
 lto = true
 codegen-units = 1
-panic = "abort"
