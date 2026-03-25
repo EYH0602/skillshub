@@ -62,8 +62,7 @@ mod tests {
         let chinese = "基於 Manus 風格的檔案規劃系統";
         let result = truncate_string(chinese, 20);
         assert!(result.ends_with("..."));
-        // Verify the result is valid UTF-8 (implicit—Rust strings are always valid)
-        assert!(result.len() <= 23); // up to 20 bytes of chars + "..."
+        assert!(result.len() <= 20); // up to 17 bytes of chars + "..."
     }
 
     #[test]
