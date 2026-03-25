@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 /// Skillshub - A package manager for AI coding agent skills
 #[derive(Parser)]
@@ -87,6 +87,20 @@ pub enum Commands {
 
     /// Migrate old-style installations to the new registry format
     Migrate,
+
+    /// Generate shell completion scripts
+    Completions {
+        /// Shell to generate completions for
+        shell: Shell,
+    },
+}
+
+/// Supported shells for completion generation
+#[derive(Clone, Debug, ValueEnum)]
+pub enum Shell {
+    Bash,
+    Zsh,
+    Fish,
 }
 
 #[derive(Subcommand)]

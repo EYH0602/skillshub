@@ -298,9 +298,10 @@ struct RepoInfo {
 
 /// GitHub Gist API response
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 pub struct GistResponse {
+    #[allow(dead_code)] // populated by serde, read in tests
     pub id: String,
+    #[allow(dead_code)] // populated by serde, read in tests
     pub owner: GistOwner,
     pub updated_at: String,
     pub files: HashMap<String, GistFile>,
@@ -308,15 +309,15 @@ pub struct GistResponse {
 
 /// Gist owner info
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 pub struct GistOwner {
+    #[allow(dead_code)] // populated by serde, read in tests
     pub login: String,
 }
 
 /// A file within a gist
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 pub struct GistFile {
+    #[allow(dead_code)] // populated by serde, read in tests
     pub filename: String,
     pub content: Option<String>,
 }

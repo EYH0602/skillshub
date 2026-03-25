@@ -13,7 +13,7 @@ use super::models::{InstalledSkill, SkillId};
 use super::tap::get_tap_registry;
 use crate::commands::link_to_agents;
 use crate::paths::{get_embedded_skills_dir, get_skills_install_dir, get_tap_clone_dir, get_taps_clone_dir};
-use crate::skill::{discover_skills, parse_skill_metadata};
+use crate::skill::{discover_skills, has_references_dir, has_scripts_dir, parse_skill_metadata};
 use crate::util::{copy_dir_contents, truncate_string};
 
 const DESCRIPTION_MAX_LEN: usize = 50;
@@ -29,8 +29,27 @@ pub struct SkillListRow {
     pub tap: String,
     #[tabled(rename = "Description")]
     pub description: String,
+    #[tabled(rename = "Extras")]
+    pub extras: String,
     #[tabled(rename = "Commit")]
     pub commit: String,
+}
+
+/// Build a compact extras string from has_scripts/has_references flags.
+/// Shows "scripts, refs" for both, "scripts" or "refs" for one, or "-" for neither.
+fn format_extras(has_scripts: bool, has_references: bool) -> String {
+    let mut parts = Vec::new();
+    if has_scripts {
+        parts.push("scripts");
+    }
+    if has_references {
+        parts.push("refs");
+    }
+    if parts.is_empty() {
+        "-".to_string()
+    } else {
+        parts.join(", ")
+    }
 }
 
 /// Install a skill by full name (tap/skill[@commit])
@@ -668,6 +687,18 @@ pub fn list_skills() -> Result<()> {
                 }
             });
 
+            // Check has_scripts/has_references for installed skills
+            let extras = if installed.is_some() {
+                if let Ok(idir) = get_skills_install_dir() {
+                    let skill_dir = idir.join(tap_name).join(skill_name);
+                    format_extras(has_scripts_dir(&skill_dir), has_references_dir(&skill_dir))
+                } else {
+                    "-".to_string()
+                }
+            } else {
+                "-".to_string()
+            };
+
             rows.push(SkillListRow {
                 status,
                 name: skill_name.clone(),
@@ -676,6 +707,7 @@ pub fn list_skills() -> Result<()> {
                     entry.description.as_deref().unwrap_or("No description"),
                     DESCRIPTION_MAX_LEN,
                 ),
+                extras,
                 commit,
             });
         }
@@ -700,11 +732,14 @@ pub fn list_skills() -> Result<()> {
             "Added from URL".to_string()
         };
 
+        let skill_dir = install_dir.join(&installed.tap).join(&installed.skill);
+
         rows.push(SkillListRow {
             status: "✓",
             name: installed.skill.clone(),
             tap: installed.tap.clone(),
             description: truncate_string(&description, DESCRIPTION_MAX_LEN),
+            extras: format_extras(has_scripts_dir(&skill_dir), has_references_dir(&skill_dir)),
             commit: installed.commit.clone().unwrap_or_else(|| "-".to_string()),
         });
     }
@@ -773,11 +808,23 @@ pub fn search_skills(query: &str) -> Result<()> {
                 let full_name = format!("{}/{}", tap_name, skill_name);
                 let installed = db.installed.get(&full_name);
 
+                let extras = if installed.is_some() {
+                    if let Ok(idir) = get_skills_install_dir() {
+                        let skill_dir = idir.join(tap_name).join(skill_name);
+                        format_extras(has_scripts_dir(&skill_dir), has_references_dir(&skill_dir))
+                    } else {
+                        "-".to_string()
+                    }
+                } else {
+                    "-".to_string()
+                };
+
                 results.push(SkillListRow {
                     status: if installed.is_some() { "✓" } else { "○" },
                     name: skill_name.clone(),
                     tap: tap_name.clone(),
                     description: truncate_string(entry.description.as_deref().unwrap_or("No description"), 50),
+                    extras,
                     commit: installed
                         .and_then(|i| i.commit.clone())
                         .unwrap_or_else(|| "-".to_string()),
@@ -886,6 +933,60 @@ pub fn show_skill_info(full_name: &str) -> Result<()> {
         }
     }
 
+    // Show has_scripts and has_references for installed skills
+    let skill_dir = install_dir.join(&skill_id.tap).join(&skill_id.skill);
+    if skill_dir.exists() {
+        // Use discover_skills to build a Skill with populated has_scripts/has_references
+        let tap_skills_dir = install_dir.join(&skill_id.tap);
+        let discovered = discover_skills(&tap_skills_dir).unwrap_or_default();
+        let skill_info = discovered
+            .into_iter()
+            .find(|s| s.name == skill_id.skill || s.path == skill_dir);
+        match skill_info {
+            Some(s) => {
+                println!(
+                    "  {}: {}",
+                    "Scripts".cyan(),
+                    if s.has_scripts {
+                        "Yes".green().to_string()
+                    } else {
+                        "No".to_string()
+                    }
+                );
+                println!(
+                    "  {}: {}",
+                    "References".cyan(),
+                    if s.has_references {
+                        "Yes".green().to_string()
+                    } else {
+                        "No".to_string()
+                    }
+                );
+            }
+            None => {
+                // Fallback to direct filesystem check
+                println!(
+                    "  {}: {}",
+                    "Scripts".cyan(),
+                    if has_scripts_dir(&skill_dir) {
+                        "Yes".green().to_string()
+                    } else {
+                        "No".to_string()
+                    }
+                );
+                println!(
+                    "  {}: {}",
+                    "References".cyan(),
+                    if has_references_dir(&skill_dir) {
+                        "Yes".green().to_string()
+                    } else {
+                        "No".to_string()
+                    }
+                );
+            }
+        }
+    }
+
     println!(
         "  {}: {}",
         "Status".cyan(),
@@ -912,8 +1013,7 @@ pub fn show_skill_info(full_name: &str) -> Result<()> {
         }
 
         // Show local path
-        let skill_path = install_dir.join(&skill_id.tap).join(&skill_id.skill);
-        println!("  {}: {}", "Local path".cyan(), skill_path.display());
+        println!("  {}: {}", "Local path".cyan(), skill_dir.display());
     }
 
     // Show installation command if not installed
@@ -1114,5 +1214,25 @@ mod tests {
             entries.is_empty(),
             "destination should be empty after copying empty source"
         );
+    }
+
+    #[test]
+    fn test_format_extras_neither() {
+        assert_eq!(format_extras(false, false), "-");
+    }
+
+    #[test]
+    fn test_format_extras_scripts_only() {
+        assert_eq!(format_extras(true, false), "scripts");
+    }
+
+    #[test]
+    fn test_format_extras_refs_only() {
+        assert_eq!(format_extras(false, true), "refs");
+    }
+
+    #[test]
+    fn test_format_extras_both() {
+        assert_eq!(format_extras(true, true), "scripts, refs");
     }
 }

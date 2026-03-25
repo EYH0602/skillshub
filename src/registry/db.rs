@@ -189,12 +189,6 @@ pub fn is_external_skill(db: &Database, name: &str) -> bool {
     db.external.contains_key(name)
 }
 
-/// Get external skill info
-#[allow(dead_code)]
-pub fn get_external_skill<'a>(db: &'a Database, name: &str) -> Option<&'a ExternalSkill> {
-    db.external.get(name)
-}
-
 /// Add an external skill to the database
 pub fn add_external_skill(db: &mut Database, name: &str, skill: ExternalSkill) {
     db.external.insert(name.to_string(), skill);
@@ -358,7 +352,7 @@ mod tests {
         add_external_skill(&mut db, "my-external-skill", external);
         assert!(is_external_skill(&db, "my-external-skill"));
 
-        let retrieved = get_external_skill(&db, "my-external-skill");
+        let retrieved = db.external.get("my-external-skill");
         assert!(retrieved.is_some());
         assert_eq!(retrieved.unwrap().source_agent, ".claude");
 

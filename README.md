@@ -1,3 +1,5 @@
+[![CI](https://github.com/EYH0602/skillshub/actions/workflows/ci.yml/badge.svg)](https://github.com/EYH0602/skillshub/actions/workflows/ci.yml)
+
 # Skillshub
 
 Skillshub is a package manager for AI coding agent skills - like Homebrew for skills.
@@ -220,6 +222,23 @@ export GITHUB_TOKEN=your_token_here
 ```
 
 For **private repositories**, configure git credential helpers or SSH keys — skillshub uses `git clone` directly.
+
+## Shell Completions
+
+Generate tab-completion scripts for your shell:
+
+```bash
+# Bash
+skillshub completions bash > ~/.local/share/bash-completion/completions/skillshub
+
+# Zsh (ensure ~/.zfunc is in your fpath)
+skillshub completions zsh > ~/.zfunc/_skillshub
+
+# Fish
+skillshub completions fish > ~/.config/fish/completions/skillshub.fish
+```
+
+Completions are generated from the CLI definition, so they are always in sync with the installed version.
 
 ## Diagnostics
 

@@ -39,6 +39,7 @@ pub fn copy_dir_contents(src: &Path, dst: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     #[test]
     fn test_truncate_string() {
@@ -126,5 +127,44 @@ mod tests {
             !dst.join("link-to-dir").exists(),
             "symlink to directory should be skipped"
         );
+    }
+
+    /// Verify that the `colored` crate suppresses ANSI escape codes when
+    /// the `NO_COLOR` environment variable is set (per <https://no-color.org>).
+    ///
+    /// The global `SHOULD_COLORIZE` is a lazy_static that reads the environment
+    /// once at initialization and caches the result. Setting `NO_COLOR` after
+    /// that has no effect on the cached value. To test the env-var logic
+    /// without `set_override` (which bypasses the env var entirely), we
+    /// construct a fresh `ShouldColorize::from_env()` with `NO_COLOR` set
+    /// and verify that `should_colorize()` returns false.
+    #[test]
+    #[serial]
+    fn test_no_color_env_suppresses_ansi_codes() {
+        // Save previous env state
+        let prev_no_color = std::env::var("NO_COLOR").ok();
+        let prev_clicolor_force = std::env::var("CLICOLOR_FORCE").ok();
+
+        // Set NO_COLOR and clear CLICOLOR_FORCE (which would take priority)
+        std::env::set_var("NO_COLOR", "1");
+        std::env::remove_var("CLICOLOR_FORCE");
+
+        // Build a fresh ShouldColorize from the current environment.
+        // This reads NO_COLOR at construction time, unlike the global
+        // lazy_static which only reads it once.
+        let should = colored::control::ShouldColorize::from_env();
+        assert!(
+            !should.should_colorize(),
+            "ShouldColorize::from_env() should return false when NO_COLOR=1 is set"
+        );
+
+        // Restore previous env state
+        match prev_no_color {
+            Some(v) => std::env::set_var("NO_COLOR", v),
+            None => std::env::remove_var("NO_COLOR"),
+        }
+        if let Some(v) = prev_clicolor_force {
+            std::env::set_var("CLICOLOR_FORCE", v);
+        }
     }
 }

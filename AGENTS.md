@@ -11,6 +11,7 @@ For architecture, CLI reference, supported agents, and skill/tap formats, see `d
 
 - Rust 2021 edition
 - `git` is a required runtime dependency (used for tap cloning and updates)
+- `clap_complete` is used to generate shell completion scripts (bash, zsh, fish)
 - Always update `README.md` and `CLAUDE.md` when you introduce new features or libraries.
 - Always write unit tests for new features.
 - Always test your code after implementation.
@@ -37,6 +38,7 @@ cargo run -- agents
 cargo run -- external list
 cargo run -- external scan
 cargo run -- doctor
+cargo run -- completions bash
 ```
 
 ### Planning
