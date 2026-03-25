@@ -6,7 +6,16 @@ pub fn truncate_string(value: &str, max_len: usize) -> String {
     if value.len() <= max_len {
         value.to_string()
     } else {
-        format!("{}...", &value[..max_len.saturating_sub(3)])
+        let truncate_at = max_len.saturating_sub(3);
+        // Find the last char boundary at or before truncate_at to avoid
+        // slicing in the middle of a multi-byte UTF-8 character.
+        let end = value
+            .char_indices()
+            .map(|(i, _)| i)
+            .take_while(|&i| i <= truncate_at)
+            .last()
+            .unwrap_or(0);
+        format!("{}...", &value[..end])
     }
 }
 
@@ -45,6 +54,15 @@ mod tests {
     fn test_truncate_string() {
         assert_eq!(truncate_string("short", 10), "short");
         assert_eq!(truncate_string("hello world", 8), "hello...");
+    }
+
+    #[test]
+    fn test_truncate_string_multibyte() {
+        // Should not panic when truncation falls inside a multi-byte char
+        let chinese = "基於 Manus 風格的檔案規劃系統";
+        let result = truncate_string(chinese, 20);
+        assert!(result.ends_with("..."));
+        assert!(result.len() <= 20); // up to 17 bytes of chars + "..."
     }
 
     #[test]
