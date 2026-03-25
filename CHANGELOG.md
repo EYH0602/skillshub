@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-03-24
+
+### Added
+
+- `skillshub completions <shell>` subcommand for generating bash, zsh, and fish
+  shell completion scripts (always in sync with CLI definition).
+- `has_scripts` and `has_references` columns in `skillshub list` output.
+- GitHub Release workflow with pre-built binaries for Linux (x86_64) and macOS
+  (x86_64, aarch64) — triggered on `v*` tags.
+- `cargo audit` CI job with weekly scheduled runs to detect dependency
+  vulnerabilities.
+- macOS CI test matrix alongside existing Linux CI.
+- CI status badge in README.
+- CHANGELOG.md reconstructed from git history.
+
+### Changed
+
+- Optimized release binary: strip symbols, LTO, single codegen unit.
+- Split CI into separate lint and test jobs for faster feedback.
+- Cleaned up crate metadata: added `readme`, `rust-version` (MSRV 1.74.0), and
+  expanded `exclude` list for leaner published crate.
+- Consistent colored output across all commands (green/yellow/red).
+- `NO_COLOR` environment variable is respected for color suppression.
+
+### Removed
+
+- Dead code: `tarball_url()` method and its test assertion.
+- Unnecessary `#[allow(dead_code)]` annotations on actively-used functions and
+  serde-deserialized structs.
+
 ## [0.3.0] - 2026-03-23
 
 ### Added
@@ -127,7 +157,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Anthropic skills as the default tap.
 - Basic table-formatted output for skill listings.
 
-[Unreleased]: https://github.com/EYH0602/skillshub/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/EYH0602/skillshub/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/EYH0602/skillshub/compare/v0.3.0...v1.0.0
 [0.3.0]: https://github.com/EYH0602/skillshub/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/EYH0602/skillshub/compare/0.1.10...v0.2.0
 [0.1.10]: https://github.com/EYH0602/skillshub/compare/d291d9e...0.1.10
