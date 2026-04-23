@@ -100,6 +100,12 @@ Local directory layout:
 | OpenClaw | `~/.openclaw`  | `~/.openclaw/skills`  |
 | ZeroClaw | `~/.zeroclaw`  | `~/.zeroclaw/skills`  |
 | Kiro     | `~/.kiro`      | `~/.kiro/steering`    |
+| Gemini   | `~/.gemini`    | `~/.gemini/skills`    |
+| Copilot  | `~/.copilot`   | `~/.copilot/skills`   |
+| Junie    | `~/.junie`     | `~/.junie/skills`     |
+| Augment  | `~/.augment`   | `~/.augment/skills`   |
+| Warp     | `~/.warp`      | `~/.warp/skills`      |
+| Cline    | `~/.cline`     | `~/.cline/skills`     |
 
 To add a new agent, update `KNOWN_AGENTS` in `src/agent.rs`.
 
