@@ -7,7 +7,7 @@ use crate::paths::get_home_dir;
 pub const KNOWN_AGENTS: &[(&str, &str)] = &[
     (".claude", "skills"),
     (".codex", "skills"),
-    (".opencode", "skill"),
+    (".opencode", "skills"),
     (".aider", "skills"),
     (".cursor", "skills"),
     (".continue", "skills"),
