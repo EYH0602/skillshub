@@ -198,7 +198,7 @@ Skillshub automatically detects and links to these coding agents:
 | -------- | -------------- | --------------------- |
 | Claude   | `~/.claude`    | `~/.claude/skills`    |
 | Codex    | `~/.codex`     | `~/.codex/skills`     |
-| OpenCode | `~/.opencode`  | `~/.opencode/skill`   |
+| OpenCode | `~/.opencode`  | `~/.opencode/skills`  |
 | Aider    | `~/.aider`     | `~/.aider/skills`     |
 | Cursor   | `~/.cursor`    | `~/.cursor/skills`    |
 | Continue | `~/.continue`  | `~/.continue/skills`  |

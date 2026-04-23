@@ -264,7 +264,7 @@ fn test_all_known_agents() {
     let agents = vec![
         (".claude", "skills"),
         (".codex", "skills"),
-        (".opencode", "skill"),
+        (".opencode", "skills"),
         (".aider", "skills"),
         (".cursor", "skills"),
         (".continue", "skills"),
