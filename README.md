@@ -206,6 +206,7 @@ Skillshub automatically detects and links to these coding agents:
 | Kimi     | `~/.kimi`      | `~/.kimi/skills`      |
 | OpenClaw | `~/.openclaw`  | `~/.openclaw/skills`  |
 | ZeroClaw | `~/.zeroclaw`  | `~/.zeroclaw/skills`  |
+| Kiro     | `~/.kiro`      | `~/.kiro/steering`    |
 
 ## GitHub API & Authentication
 

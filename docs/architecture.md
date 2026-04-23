@@ -99,6 +99,7 @@ Local directory layout:
 | Kimi     | `~/.kimi`      | `~/.kimi/skills`      |
 | OpenClaw | `~/.openclaw`  | `~/.openclaw/skills`  |
 | ZeroClaw | `~/.zeroclaw`  | `~/.zeroclaw/skills`  |
+| Kiro     | `~/.kiro`      | `~/.kiro/steering`    |
 
 To add a new agent, update `KNOWN_AGENTS` in `src/agent.rs`.
 
