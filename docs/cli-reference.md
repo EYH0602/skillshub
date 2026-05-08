@@ -10,7 +10,7 @@ skillshub add <gist-url>                    # Add skill(s) from a GitHub Gist
 ```bash
 skillshub list                              # List all available skills
 skillshub search <query>                    # Search skills across all taps
-skillshub install <owner/repo/skill>[@commit]  # Install a skill
+skillshub install <owner/repo/skill>        # Install a skill
 skillshub uninstall <owner/repo/skill>      # Remove installed skill
 skillshub update [owner/repo/skill]         # Update skill(s) to latest
 skillshub info <owner/repo/skill>           # Show skill details
