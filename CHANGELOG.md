@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.1.0] - 2026-05-07
 
 ### Added
 
@@ -31,6 +31,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in `src/cli.rs`) now reference `EYH0602/skillshub/using-skillshub` instead
   of a non-existent `code-reviewer`, so copy-pasting examples actually works
   against the default tap.
+
+## [1.0.3] - 2026-04-22
+
+### Added
+
+- Kiro CLI agent support — detects `~/.kiro/` and links skills into
+  `~/.kiro/steering/` (Kiro's equivalent of `~/.claude/skills/`).
+- Six additional trending coding agents: Gemini CLI, GitHub Copilot, JetBrains
+  Junie, Augment Code, Warp, and Cline.
+
+## [1.0.2] - 2026-04-22
+
+### Fixed
+
+- OpenCode skills path corrected from `~/.opencode/skill` to `~/.opencode/skills`
+  (closes #70).
+
+## [1.0.1] - 2026-03-24
+
+### Fixed
+
+- `truncate_string` no longer panics when truncation falls inside a multi-byte
+  UTF-8 character (e.g. CJK text in tap names or skill descriptions). Previously
+  sliced at raw byte offsets; now respects character boundaries.
 
 ## [1.0.0] - 2026-03-24
 
