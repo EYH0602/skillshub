@@ -23,7 +23,8 @@ skillshub star-list <url>                   # Add all repos from a star list as 
 skillshub star-list <url> --install         # Also install all skills from each tap
 ```
 
-Requires `GITHUB_TOKEN` (GraphQL API requires authentication).
+Requires `GH_TOKEN` or `GITHUB_TOKEN` (GraphQL API requires authentication).
+`GH_TOKEN` is checked first, matching the `gh` CLI.
 
 ## Tap Management
 

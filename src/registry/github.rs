@@ -943,6 +943,16 @@ mod tests {
     }
 
     #[test]
+    #[serial]
+    fn test_github_token_treats_empty_github_token_as_unset() {
+        std::env::remove_var("GH_TOKEN");
+        std::env::set_var("GITHUB_TOKEN", "");
+        let token = github_token();
+        std::env::remove_var("GITHUB_TOKEN");
+        assert!(token.is_none());
+    }
+
+    #[test]
     fn test_parse_skill_md_content() {
         let content = r#"---
 name: test-skill
@@ -1899,13 +1909,16 @@ name: minimal-skill
         // Point GraphQL URL to mock server
         let gql_url = format!("{}/graphql", server.uri());
         std::env::set_var("SKILLSHUB_GITHUB_GRAPHQL_URL", &gql_url);
-        // Set a dummy token so GITHUB_TOKEN check succeeds
+        // Clear GH_TOKEN so a dev's real token doesn't get sent to the mock,
+        // then set a dummy GITHUB_TOKEN so the auth check succeeds.
+        std::env::remove_var("GH_TOKEN");
         std::env::set_var("GITHUB_TOKEN", "test-token");
 
         let result = fetch_star_list_repos("testuser", "skills");
 
         // Clean up env vars
         std::env::remove_var("SKILLSHUB_GITHUB_GRAPHQL_URL");
+        std::env::remove_var("GH_TOKEN");
         std::env::remove_var("GITHUB_TOKEN");
 
         assert!(result.is_ok(), "fetch should succeed: {:?}", result.err());
@@ -1946,11 +1959,13 @@ name: minimal-skill
 
         let gql_url = format!("{}/graphql", server.uri());
         std::env::set_var("SKILLSHUB_GITHUB_GRAPHQL_URL", &gql_url);
+        std::env::remove_var("GH_TOKEN");
         std::env::set_var("GITHUB_TOKEN", "test-token");
 
         let result = fetch_star_list_repos("testuser", "nonexistent");
 
         std::env::remove_var("SKILLSHUB_GITHUB_GRAPHQL_URL");
+        std::env::remove_var("GH_TOKEN");
         std::env::remove_var("GITHUB_TOKEN");
 
         assert!(result.is_err());
