@@ -32,7 +32,7 @@ cargo run -- list        # Run directly
 cargo run -- tap list
 cargo run -- tap add owner/repo --branch dev
 cargo run -- list
-cargo run -- install EYH0602/skillshub/code-reviewer
+cargo run -- install EYH0602/skillshub/using-skillshub
 cargo run -- link
 cargo run -- agents
 cargo run -- external list

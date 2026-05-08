@@ -33,8 +33,8 @@ cargo install --path .
 ## Quick Start
 
 ```bash
-# Install from the default tap (bundled skills)
-skillshub install EYH0602/skillshub/code-reviewer
+# Install from the default tap (bundled skill)
+skillshub install EYH0602/skillshub/using-skillshub
 
 # Or add third-party taps and install from them
 skillshub tap add anthropics/skills
@@ -76,17 +76,17 @@ skillshub list
 skillshub search python
 
 # Install a skill from a tap (format: owner/repo/skill)
-skillshub install EYH0602/skillshub/code-reviewer
+skillshub install EYH0602/skillshub/using-skillshub
 
 # Show detailed info about a skill
-skillshub info EYH0602/skillshub/code-reviewer
+skillshub info EYH0602/skillshub/using-skillshub
 
 # Update installed skills to latest version
 skillshub update                                    # Update all
-skillshub update EYH0602/skillshub/code-reviewer    # Update one
+skillshub update EYH0602/skillshub/using-skillshub    # Update one
 
 # Uninstall a skill
-skillshub uninstall EYH0602/skillshub/code-reviewer
+skillshub uninstall EYH0602/skillshub/using-skillshub
 
 # Install all skills from the default taps
 skillshub install-all

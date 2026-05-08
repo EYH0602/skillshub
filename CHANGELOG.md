@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Bundled `using-skillshub` skill in the default `EYH0602/skillshub` tap.
+  Teaches AI coding agents how to drive the `skillshub` CLI: tap-vs-install-vs-link
+  mental model, command decision table, common workflows (one-skill install,
+  whole-tap subscribe, gist install, re-link, update, uninstall), and SKILL.md
+  authoring guidance. Bundles `cli-reference.md` and `architecture.md` as
+  references so the skill is self-contained after install.
+
+### Removed
+
+- Previously bundled skills (analyze-ci, docs-review, docstring, fuzzing,
+  github-actions-templates, paper-polish, python-packaging, read-repo-references,
+  senior-data-scientist, temporal-python-testing, testing-python,
+  uv-package-manager, write-unit-tests). The default tap now ships a single
+  focused skill; broader skill curation is intentionally moving out of this
+  repo.
+
+### Changed
+
+- Documentation examples (`README.md`, `CLAUDE.md`, `AGENTS.md`, doc comments
+  in `src/cli.rs`) now reference `EYH0602/skillshub/using-skillshub` instead
+  of a non-existent `code-reviewer`, so copy-pasting examples actually works
+  against the default tap.
+
 ## [1.0.0] - 2026-03-24
 
 ### Added
