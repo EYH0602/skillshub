@@ -32,6 +32,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of a non-existent `code-reviewer`, so copy-pasting examples actually works
   against the default tap.
 
+## [1.0.4] - 2026-05-07
+
+### Changed
+
+- GitHub API authentication now reads `GH_TOKEN` in addition to `GITHUB_TOKEN`,
+  matching the `gh` CLI convention. `GH_TOKEN` takes precedence when both are
+  set. (#67)
+
 ## [1.0.3] - 2026-04-22
 
 ### Added
