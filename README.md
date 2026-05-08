@@ -140,7 +140,9 @@ skillshub star-list https://github.com/stars/username/lists/skills
 skillshub star-list https://github.com/stars/username/lists/skills --install
 ```
 
-This requires a `GITHUB_TOKEN` (the GraphQL API requires authentication).
+This requires `GH_TOKEN` or `GITHUB_TOKEN` (the GraphQL API requires
+authentication). `GH_TOKEN` takes precedence when both are set, matching the
+`gh` CLI convention.
 
 ### Agent Linking
 
@@ -222,9 +224,12 @@ The GitHub API is only used for:
 - **Gist skills** (`skillshub add https://gist.github.com/...`)
 - **Star list imports** (`skillshub star-list ...`)
 
-For these operations, set a `GITHUB_TOKEN` to avoid rate limiting:
+For these operations, set `GH_TOKEN` (preferred) or `GITHUB_TOKEN` to avoid
+rate limiting. When both are set, `GH_TOKEN` wins, matching the `gh` CLI:
 
 ```bash
+export GH_TOKEN=your_token_here
+# or
 export GITHUB_TOKEN=your_token_here
 ```
 

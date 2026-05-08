@@ -113,8 +113,8 @@ fn print_rate_limit_wait(reason: &str, wait_secs: u64, attempt: u32) {
         "  {} Waiting {}s before retrying (attempt {}/{})...",
         reason, wait_secs, attempt, MAX_RETRIES
     );
-    if std::env::var("GITHUB_TOKEN").is_err() {
-        eprint!("\n  Tip: Set GITHUB_TOKEN for higher rate limits (5000/hour vs 60/hour).");
+    if github_token().is_none() {
+        eprint!("\n  Tip: Set GH_TOKEN or GITHUB_TOKEN for higher rate limits (5000/hour vs 60/hour).");
     }
     eprintln!();
 }
@@ -164,7 +164,7 @@ where
                         if let Some(wait) = rate_info.wait_duration() {
                             if wait.as_secs() > MAX_RATE_LIMIT_WAIT_SECS {
                                 anyhow::bail!(
-                                    "Rate limit reset is {}s away (>{} max). Set GITHUB_TOKEN for higher limits.",
+                                    "Rate limit reset is {}s away (>{} max). Set GH_TOKEN or GITHUB_TOKEN for higher limits.",
                                     wait.as_secs(),
                                     MAX_RATE_LIMIT_WAIT_SECS
                                 );
@@ -267,9 +267,24 @@ fn build_client() -> Result<Client> {
     })
 }
 
-/// Add GitHub token authentication to a request if GITHUB_TOKEN is set
+/// Read the GitHub auth token from the environment.
+///
+/// Checks `GH_TOKEN` first (matching the `gh` CLI convention), then falls
+/// back to `GITHUB_TOKEN`. Empty values are treated as unset.
+fn github_token() -> Option<String> {
+    for var in ["GH_TOKEN", "GITHUB_TOKEN"] {
+        if let Ok(token) = std::env::var(var) {
+            if !token.is_empty() {
+                return Some(token);
+            }
+        }
+    }
+    None
+}
+
+/// Add GitHub token authentication to a request if a token env var is set.
 fn with_auth(request: RequestBuilder) -> RequestBuilder {
-    if let Ok(token) = std::env::var("GITHUB_TOKEN") {
+    if let Some(token) = github_token() {
         request.bearer_auth(token)
     } else {
         request
@@ -337,7 +352,7 @@ pub fn get_default_branch(owner: &str, repo: &str) -> Result<String> {
                 "Repository not found on GitHub: {}/{}\n\
                  Please check that:\n\
                  - The repository exists and is spelled correctly\n\
-                 - The repository is public (or GITHUB_TOKEN is set for private repos)",
+                 - The repository is public (or GH_TOKEN/GITHUB_TOKEN is set for private repos)",
                 owner,
                 repo
             );
@@ -457,7 +472,7 @@ fn is_valid_repo_id(s: &str) -> bool {
 ///
 /// Uses the GitHub Tree API to recursively find all SKILL.md files in the repo,
 /// then fetches each one to extract metadata.
-/// Set GITHUB_TOKEN environment variable to avoid rate limiting.
+/// Set `GH_TOKEN` or `GITHUB_TOKEN` environment variable to avoid rate limiting.
 pub fn discover_skills_from_repo(github_url: &GitHubUrl, tap_name: &str) -> Result<TapRegistry> {
     let client = build_client()?;
 
@@ -632,7 +647,7 @@ pub fn fetch_gist(gist_id: &str) -> Result<GistResponse> {
             anyhow::bail!(
                 "Gist not found: {}\n\
                  Please check that the gist ID is correct and the gist is public \
-                 (or GITHUB_TOKEN is set for secret gists)",
+                 (or GH_TOKEN/GITHUB_TOKEN is set for secret gists)",
                 gist_id
             );
         }
@@ -733,11 +748,11 @@ pub fn parse_star_list_url(url: &str) -> Result<(String, String)> {
 ///
 /// Returns a list of "owner/repo" identifiers.
 pub fn fetch_star_list_repos(username: &str, list_name: &str) -> Result<Vec<String>> {
-    let token = std::env::var("GITHUB_TOKEN").with_context(|| {
-        "GITHUB_TOKEN is required for star list operations.\n\
+    let token = github_token().context(
+        "GH_TOKEN or GITHUB_TOKEN is required for star list operations.\n\
          The GraphQL API does not support unauthenticated requests.\n\
-         Set GITHUB_TOKEN with a personal access token."
-    })?;
+         Set GH_TOKEN (preferred) or GITHUB_TOKEN with a personal access token.",
+    )?;
     let client = build_client()?;
     let gql_url = graphql_url();
 
@@ -768,7 +783,7 @@ pub fn fetch_star_list_repos(username: &str, list_name: &str) -> Result<Vec<Stri
     if !resp.status().is_success() {
         anyhow::bail!(
             "Failed to query GitHub GraphQL API: HTTP {}\n\
-             Make sure GITHUB_TOKEN is set and valid.",
+             Make sure GH_TOKEN or GITHUB_TOKEN is set and valid.",
             resp.status()
         );
     }
@@ -885,6 +900,46 @@ mod tests {
     fn test_build_client_succeeds() {
         let result = build_client();
         assert!(result.is_ok(), "build_client should succeed in normal conditions");
+    }
+
+    #[test]
+    #[serial]
+    fn test_github_token_prefers_gh_token() {
+        std::env::set_var("GH_TOKEN", "gh-value");
+        std::env::set_var("GITHUB_TOKEN", "github-value");
+        let token = github_token();
+        std::env::remove_var("GH_TOKEN");
+        std::env::remove_var("GITHUB_TOKEN");
+        assert_eq!(token.as_deref(), Some("gh-value"));
+    }
+
+    #[test]
+    #[serial]
+    fn test_github_token_falls_back_to_github_token() {
+        std::env::remove_var("GH_TOKEN");
+        std::env::set_var("GITHUB_TOKEN", "github-value");
+        let token = github_token();
+        std::env::remove_var("GITHUB_TOKEN");
+        assert_eq!(token.as_deref(), Some("github-value"));
+    }
+
+    #[test]
+    #[serial]
+    fn test_github_token_none_when_unset() {
+        std::env::remove_var("GH_TOKEN");
+        std::env::remove_var("GITHUB_TOKEN");
+        assert!(github_token().is_none());
+    }
+
+    #[test]
+    #[serial]
+    fn test_github_token_treats_empty_as_unset() {
+        std::env::set_var("GH_TOKEN", "");
+        std::env::set_var("GITHUB_TOKEN", "github-value");
+        let token = github_token();
+        std::env::remove_var("GH_TOKEN");
+        std::env::remove_var("GITHUB_TOKEN");
+        assert_eq!(token.as_deref(), Some("github-value"));
     }
 
     #[test]
