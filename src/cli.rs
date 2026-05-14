@@ -17,7 +17,7 @@ pub enum Commands {
 
     /// Install a skill (format: owner/repo/skill[@commit])
     Install {
-        /// Full skill name (e.g., EYH0602/skillshub/code-reviewer)
+        /// Full skill name (e.g., EYH0602/skillshub/using-skillshub)
         name: String,
     },
 
@@ -29,7 +29,7 @@ pub enum Commands {
 
     /// Uninstall a skill (format: owner/repo/skill)
     Uninstall {
-        /// Full skill name (e.g., EYH0602/skillshub/code-reviewer)
+        /// Full skill name (e.g., EYH0602/skillshub/using-skillshub)
         name: String,
     },
 
@@ -50,7 +50,7 @@ pub enum Commands {
 
     /// Show detailed information about a skill
     Info {
-        /// Full skill name (e.g., EYH0602/skillshub/code-reviewer)
+        /// Full skill name (e.g., EYH0602/skillshub/using-skillshub)
         name: String,
     },
 
