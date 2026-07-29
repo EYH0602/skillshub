@@ -33,7 +33,7 @@ fn main() -> Result<()> {
         Commands::Install { name } => install_skill(&name)?,
         Commands::Add { url } => add_skill_from_url(&url)?,
         Commands::Uninstall { name } => uninstall_skill(&name)?,
-        Commands::Update { name } => update_skill(name.as_deref())?,
+        Commands::Update { name, prune } => update_skill(name.as_deref(), prune)?,
         Commands::List => list_skills()?,
         Commands::Search { query } => search_skills(&query)?,
         Commands::Info { name } => show_skill_info(&name)?,
@@ -43,7 +43,7 @@ fn main() -> Result<()> {
             TapCommands::Add { url, install, branch } => add_tap(&url, branch.as_deref(), install)?,
             TapCommands::Remove { name, keep_skills } => remove_tap(&name, keep_skills)?,
             TapCommands::List => list_taps()?,
-            TapCommands::Update { name } => update_tap(name.as_deref())?,
+            TapCommands::Update { name, prune } => update_tap(name.as_deref(), prune)?,
             TapCommands::InstallAll { name } => install_all_from_tap(&name)?,
         },
         Commands::External(ext_cmd) => match ext_cmd {

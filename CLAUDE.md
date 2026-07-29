@@ -33,6 +33,8 @@ cargo run -- tap list
 cargo run -- tap add owner/repo --branch dev
 cargo run -- list
 cargo run -- install EYH0602/skillshub/using-skillshub
+cargo run -- update --prune
+cargo run -- tap update --prune
 cargo run -- link
 cargo run -- agents
 cargo run -- external list

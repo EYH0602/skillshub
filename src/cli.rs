@@ -37,6 +37,10 @@ pub enum Commands {
     Update {
         /// Full skill name to update, or omit to update all
         name: Option<String>,
+
+        /// Uninstall installed skills that no longer exist upstream (tap or gist)
+        #[arg(long)]
+        prune: bool,
     },
 
     /// List all available skills
@@ -136,6 +140,10 @@ pub enum TapCommands {
     Update {
         /// Name of the tap to update, or omit to update all
         name: Option<String>,
+
+        /// Uninstall installed skills that no longer exist in the updated tap
+        #[arg(long)]
+        prune: bool,
     },
 
     /// Install all skills from a specific tap

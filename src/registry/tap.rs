@@ -15,8 +15,9 @@ use super::github::{
     discover_skills_from_repo, fetch_star_list_repos, is_gist_url, is_safe_skill_name, parse_github_url,
     parse_skill_md_content, parse_star_list_url,
 };
-use super::models::{Database, SkillEntry, TapInfo, TapRegistry};
-use crate::paths::get_taps_clone_dir;
+use super::models::{Database, SkillEntry, SkillId, TapInfo, TapRegistry};
+use super::skill::remove_installed_skill_files;
+use crate::paths::{get_skills_install_dir, get_taps_clone_dir};
 use crate::util::truncate_string;
 
 const TAP_URL_MAX_LEN: usize = 50;
@@ -248,8 +249,9 @@ pub fn list_taps() -> Result<()> {
 }
 
 /// Update tap registries (fetch latest from remote)
-pub fn update_tap(name: Option<&str>) -> Result<()> {
+pub fn update_tap(name: Option<&str>, prune: bool) -> Result<()> {
     let mut db = db::init_db()?;
+    let install_dir = get_skills_install_dir()?;
 
     let taps_to_update: Vec<String> = match name {
         Some(n) => {
@@ -291,14 +293,38 @@ pub fn update_tap(name: Option<&str>) -> Result<()> {
                     }
                 }
 
-                if !result.removed_installed.is_empty() {
-                    println!(
-                        "\n    {} {} installed skill(s) no longer in tap:",
-                        "!".yellow().bold(),
-                        result.removed_installed.len()
-                    );
-                    for skill in &result.removed_installed {
-                        println!("      skillshub uninstall {}/{}", tap_name, skill);
+                // Orphaned installed skills: those currently installed from this
+                // tap that are absent from the freshly-fetched registry. Derived
+                // from current membership rather than the diff baseline, so the
+                // "re-run with --prune" hint still detects them after a plain
+                // (non-prune) update has already refreshed the cache.
+                let orphaned = orphaned_installed_skills(&db, &tap_name, &result.current_skills);
+
+                if !orphaned.is_empty() {
+                    if prune {
+                        println!("    {} pruned installed skill(s) no longer in tap:", "-".red());
+                        for skill in &orphaned {
+                            let skill_id = SkillId {
+                                tap: tap_name.clone(),
+                                skill: skill.clone(),
+                            };
+                            match remove_installed_skill_files(&mut db, &install_dir, &skill_id) {
+                                Ok(()) => println!("      {} {}/{}", "-".red(), tap_name, skill),
+                                Err(e) => {
+                                    println!("      {} failed to prune {}/{}: {}", "✗".red(), tap_name, skill, e)
+                                }
+                            }
+                        }
+                    } else {
+                        println!(
+                            "\n    {} {} installed skill(s) no longer in tap:",
+                            "!".yellow().bold(),
+                            orphaned.len()
+                        );
+                        for skill in &orphaned {
+                            println!("      skillshub uninstall {}/{}", tap_name, skill);
+                        }
+                        println!("      (or re-run with --prune to remove them automatically)");
                     }
                 }
             }
@@ -321,8 +347,11 @@ struct TapUpdateResult {
     new_skills: Vec<String>,
     /// Skills removed from the tap since last update
     removed_skills: Vec<String>,
-    /// Subset of removed_skills that are currently installed (need user action)
-    removed_installed: Vec<String>,
+    /// All skill names present in the freshly-fetched registry (authoritative
+    /// upstream state). The caller uses this to compute which installed skills
+    /// are now orphaned by membership, independent of the diff baseline — so a
+    /// re-run after a non-prune update still detects them.
+    current_skills: std::collections::HashSet<String>,
 }
 
 /// Update a single tap, refresh cache, and return what changed
@@ -376,18 +405,10 @@ fn update_single_tap(db: &mut Database, name: &str, tap: &TapInfo) -> Result<Tap
     added.sort();
     removed.sort();
 
-    // Check which removed skills are currently installed
-    let mut removed_installed: Vec<String> = removed
-        .iter()
-        .filter(|skill_name| {
-            let full_name = format!("{}/{}", name, skill_name);
-            db.installed.contains_key(&full_name)
-        })
-        .cloned()
-        .collect();
-    removed_installed.sort();
-
     let total = new_registry.skills.len();
+    // Authoritative set of skills that currently exist upstream, captured before
+    // the registry is moved into the cache below.
+    let current_skills: std::collections::HashSet<String> = new_registry.skills.keys().cloned().collect();
 
     // Update cache and timestamp in database
     if let Some(t) = db.taps.get_mut(name) {
@@ -399,13 +420,31 @@ fn update_single_tap(db: &mut Database, name: &str, tap: &TapInfo) -> Result<Tap
         total,
         new_skills: added,
         removed_skills: removed,
-        removed_installed,
+        current_skills,
     })
 }
 
 /// Count installed skills for a given tap
 fn count_installed_skills(db: &Database, tap_name: &str) -> usize {
     db::get_skills_from_tap(db, tap_name).len()
+}
+
+/// Installed skills of `tap_name` that are absent from `current_skills` (the
+/// freshly-fetched registry). Membership-based, so it stays correct across
+/// re-runs — unlike a diff against a baseline the update itself overwrites, it
+/// still reports orphans after a non-prune update has refreshed the cache.
+fn orphaned_installed_skills(
+    db: &Database,
+    tap_name: &str,
+    current_skills: &std::collections::HashSet<String>,
+) -> Vec<String> {
+    let mut orphaned: Vec<String> = db::get_skills_from_tap(db, tap_name)
+        .into_iter()
+        .filter(|(_, skill)| !current_skills.contains(&skill.skill))
+        .map(|(_, skill)| skill.skill.clone())
+        .collect();
+    orphaned.sort();
+    orphaned
 }
 
 /// Format installed/available skill counts for display.
@@ -813,6 +852,182 @@ mod tests {
 
         assert_eq!(removed, vec!["beta".to_string()]);
         assert_eq!(removed_installed, vec!["beta".to_string()]);
+    }
+
+    /// Insert an installed skill into `db` under `tap`/`skill`.
+    fn insert_installed(db: &mut Database, tap: &str, skill: &str) {
+        db.installed.insert(
+            format!("{}/{}", tap, skill),
+            InstalledSkill {
+                tap: tap.to_string(),
+                skill: skill.to_string(),
+                commit: None,
+                installed_at: Utc::now(),
+                source_url: None,
+                source_path: None,
+                gist_updated_at: None,
+            },
+        );
+    }
+
+    /// Orphan detection reports installed skills absent from the current registry.
+    #[test]
+    fn test_orphaned_installed_skills_detects_absent() {
+        let mut db = Database::default();
+        insert_installed(&mut db, "test/tap", "alpha");
+        insert_installed(&mut db, "test/tap", "beta");
+
+        let current: std::collections::HashSet<String> = ["alpha".to_string()].into_iter().collect();
+        assert_eq!(
+            orphaned_installed_skills(&db, "test/tap", &current),
+            vec!["beta".to_string()]
+        );
+    }
+
+    /// Nothing is orphaned when every installed skill is still in the registry.
+    #[test]
+    fn test_orphaned_installed_skills_none_when_all_present() {
+        let mut db = Database::default();
+        insert_installed(&mut db, "test/tap", "alpha");
+        insert_installed(&mut db, "test/tap", "beta");
+
+        let current: std::collections::HashSet<String> =
+            ["alpha".to_string(), "beta".to_string()].into_iter().collect();
+        assert!(orphaned_installed_skills(&db, "test/tap", &current).is_empty());
+    }
+
+    /// Orphan detection is scoped to the given tap — skills from other taps are ignored.
+    #[test]
+    fn test_orphaned_installed_skills_scoped_to_tap() {
+        let mut db = Database::default();
+        insert_installed(&mut db, "test/tap", "beta");
+        insert_installed(&mut db, "other/tap", "beta");
+
+        let current: std::collections::HashSet<String> = std::collections::HashSet::new();
+        // Only the target tap's orphan is reported.
+        assert_eq!(
+            orphaned_installed_skills(&db, "test/tap", &current),
+            vec!["beta".to_string()]
+        );
+    }
+
+    /// Regression for the diff-baseline no-op: orphan detection is membership-based,
+    /// so it still fires on a `--prune` re-run after a plain `tap update` has already
+    /// refreshed the cache to match the new registry. The helper reads only the
+    /// installed set and the current registry — never a diff baseline — so a stale-vs-
+    /// fresh comparison is irrelevant.
+    #[test]
+    fn test_orphaned_installed_skills_detected_after_cache_refresh() {
+        let mut db = Database::default();
+        insert_installed(&mut db, "test/tap", "alpha");
+        insert_installed(&mut db, "test/tap", "beta");
+
+        // Simulates the re-run: the registry (cache already overwritten by the prior
+        // non-prune update) no longer lists `beta`, yet `beta` is still installed.
+        let current: std::collections::HashSet<String> = ["alpha".to_string()].into_iter().collect();
+        assert_eq!(
+            orphaned_installed_skills(&db, "test/tap", &current),
+            vec!["beta".to_string()],
+            "orphan must be detected on prune re-run despite the cache already matching the new registry"
+        );
+    }
+
+    /// The prune helper (used by `tap update --prune`) removes only the targeted
+    /// orphan's files and db entry, leaving sibling skills in the same tap intact.
+    #[test]
+    #[serial]
+    fn test_prune_removes_orphan_and_keeps_siblings() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        let home = temp.path().join("home");
+        let skillshub_home = home.join(".skillshub");
+        let skills_dir = skillshub_home.join("skills");
+        let beta_dir = skills_dir.join("test-user/test-repo").join("beta");
+        let alpha_dir = skills_dir.join("test-user/test-repo").join("alpha");
+        fs::create_dir_all(&beta_dir).unwrap();
+        fs::create_dir_all(&alpha_dir).unwrap();
+        fs::create_dir_all(&skillshub_home).unwrap();
+
+        let _guard = TestHomeGuard::set(&home);
+
+        let mut db = Database::default();
+        for skill in ["alpha", "beta"] {
+            db.installed.insert(
+                format!("test-user/test-repo/{}", skill),
+                InstalledSkill {
+                    tap: "test-user/test-repo".to_string(),
+                    skill: skill.to_string(),
+                    commit: None,
+                    installed_at: Utc::now(),
+                    source_url: None,
+                    source_path: None,
+                    gist_updated_at: None,
+                },
+            );
+        }
+
+        let install_dir = get_skills_install_dir().unwrap();
+        let orphan = SkillId {
+            tap: "test-user/test-repo".to_string(),
+            skill: "beta".to_string(),
+        };
+        remove_installed_skill_files(&mut db, &install_dir, &orphan).unwrap();
+
+        // Orphan is gone from disk and db; sibling remains untouched.
+        assert!(!beta_dir.exists(), "orphan dir should be removed");
+        assert!(alpha_dir.exists(), "sibling dir should remain");
+        assert!(!db.installed.contains_key("test-user/test-repo/beta"));
+        assert!(db.installed.contains_key("test-user/test-repo/alpha"));
+        // Tap dir still holds the sibling, so it must not be cleaned up.
+        assert!(skills_dir.join("test-user/test-repo").exists());
+    }
+
+    /// Pruning the last skill in a tap also cleans up the now-empty tap directory.
+    #[test]
+    #[serial]
+    fn test_prune_cleans_empty_tap_dir() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        let home = temp.path().join("home");
+        let skillshub_home = home.join(".skillshub");
+        let skills_dir = skillshub_home.join("skills");
+        let beta_dir = skills_dir.join("test-user/test-repo").join("beta");
+        fs::create_dir_all(&beta_dir).unwrap();
+        fs::create_dir_all(&skillshub_home).unwrap();
+
+        let _guard = TestHomeGuard::set(&home);
+
+        let mut db = Database::default();
+        db.installed.insert(
+            "test-user/test-repo/beta".to_string(),
+            InstalledSkill {
+                tap: "test-user/test-repo".to_string(),
+                skill: "beta".to_string(),
+                commit: None,
+                installed_at: Utc::now(),
+                source_url: None,
+                source_path: None,
+                gist_updated_at: None,
+            },
+        );
+
+        let install_dir = get_skills_install_dir().unwrap();
+        let orphan = SkillId {
+            tap: "test-user/test-repo".to_string(),
+            skill: "beta".to_string(),
+        };
+        remove_installed_skill_files(&mut db, &install_dir, &orphan).unwrap();
+
+        assert!(!beta_dir.exists());
+        assert!(
+            !skills_dir.join("test-user/test-repo").exists(),
+            "empty tap dir should be cleaned up"
+        );
+        assert!(db.installed.is_empty());
     }
 
     #[test]
