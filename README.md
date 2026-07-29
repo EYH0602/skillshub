@@ -84,6 +84,7 @@ skillshub info EYH0602/skillshub/using-skillshub
 # Update installed skills to latest version
 skillshub update                                    # Update all
 skillshub update EYH0602/skillshub/using-skillshub    # Update one
+skillshub update --prune                            # Also uninstall skills removed upstream
 
 # Uninstall a skill
 skillshub uninstall EYH0602/skillshub/using-skillshub
@@ -117,6 +118,7 @@ skillshub tap add user/repo --branch dev
 # Update tap registries (re-discover skills)
 skillshub tap update                        # Update all taps
 skillshub tap update anthropics/skills      # Update specific tap
+skillshub tap update --prune                # Also uninstall installed skills that were renamed/removed upstream
 
 # Install all skills from a specific tap
 skillshub tap install-all anthropics/skills

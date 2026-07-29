@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use anyhow::{Context, Result};
 use chrono::Utc;
 use colored::Colorize;
@@ -9,7 +11,7 @@ use tabled::{
 use super::db::{self, DEFAULT_TAP_NAME};
 use super::git::{ensure_clone, git_head_sha, tap_clone_path};
 use super::github::{discover_skills_from_gist, fetch_gist, is_gist_url, parse_gist_url, parse_github_url};
-use super::models::{InstalledSkill, SkillId};
+use super::models::{Database, InstalledSkill, SkillId};
 use super::tap::get_tap_registry;
 use crate::commands::link_to_agents;
 use crate::paths::{get_embedded_skills_dir, get_skills_install_dir, get_tap_clone_dir, get_taps_clone_dir};
@@ -444,6 +446,21 @@ pub fn uninstall_skill(full_name: &str) -> Result<()> {
         anyhow::bail!("Skill '{}' is not installed", skill_id.full_name());
     }
 
+    remove_installed_skill_files(&mut db, &install_dir, &skill_id)?;
+    db::save_db(&db)?;
+
+    println!("{} Uninstalled '{}'", "✓".green(), skill_id.full_name());
+
+    Ok(())
+}
+
+/// Remove a skill's installed files and its `db.installed` entry, mutating `db` in place.
+///
+/// Does NOT init or save the DB — the caller owns persistence. This lets callers that
+/// already hold a `Database` (e.g. the update flows) prune skills without a nested
+/// init/save cycle, which would otherwise let the caller's own `save_db` resurrect the
+/// just-removed entry from its stale in-memory copy.
+pub(crate) fn remove_installed_skill_files(db: &mut Database, install_dir: &Path, skill_id: &SkillId) -> Result<()> {
     let skill_path = install_dir.join(&skill_id.tap).join(&skill_id.skill);
 
     if skill_path.exists() {
@@ -456,17 +473,15 @@ pub fn uninstall_skill(full_name: &str) -> Result<()> {
         std::fs::remove_dir(&tap_dir)?;
     }
 
-    db::remove_installed_skill(&mut db, &skill_id.full_name());
-    db::save_db(&db)?;
-
-    println!("{} Uninstalled '{}'", "✓".green(), skill_id.full_name());
+    db::remove_installed_skill(db, &skill_id.full_name());
 
     Ok(())
 }
 
 /// Update a skill (or all skills) to latest version
-pub fn update_skill(full_name: Option<&str>) -> Result<()> {
+pub fn update_skill(full_name: Option<&str>, prune: bool) -> Result<()> {
     let mut db = db::init_db()?;
+    let install_dir = get_skills_install_dir()?;
 
     let skills_to_update: Vec<String> = match full_name {
         Some(name) => {
@@ -528,7 +543,20 @@ pub fn update_skill(full_name: Option<&str>) -> Result<()> {
                                 updated_count += 1;
                             }
                             None => {
-                                println!("  {} {} (skill no longer found in gist)", "✗".red(), skill_name);
+                                if prune {
+                                    let skill_id = SkillId {
+                                        tap: installed.tap.clone(),
+                                        skill: installed.skill.clone(),
+                                    };
+                                    match remove_installed_skill_files(&mut db, &install_dir, &skill_id) {
+                                        Ok(()) => {
+                                            println!("  {} {} (pruned, no longer in gist)", "-".red(), skill_name)
+                                        }
+                                        Err(e) => println!("  {} {} (prune failed: {})", "✗".red(), skill_name, e),
+                                    }
+                                } else {
+                                    println!("  {} {} (skill no longer found in gist)", "✗".red(), skill_name);
+                                }
                             }
                         }
                     }
@@ -567,7 +595,18 @@ pub fn update_skill(full_name: Option<&str>) -> Result<()> {
         let skill_entry = match registry.skills.get(&installed.skill) {
             Some(e) => e,
             None => {
-                println!("  {} {} (not in registry)", "✗".red(), skill_name);
+                if prune {
+                    let skill_id = SkillId {
+                        tap: installed.tap.clone(),
+                        skill: installed.skill.clone(),
+                    };
+                    match remove_installed_skill_files(&mut db, &install_dir, &skill_id) {
+                        Ok(()) => println!("  {} {} (pruned, not in registry)", "-".red(), skill_name),
+                        Err(e) => println!("  {} {} (prune failed: {})", "✗".red(), skill_name, e),
+                    }
+                } else {
+                    println!("  {} {} (not in registry)", "✗".red(), skill_name);
+                }
                 continue;
             }
         };

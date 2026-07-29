@@ -15,8 +15,9 @@ use super::github::{
     discover_skills_from_repo, fetch_star_list_repos, is_gist_url, is_safe_skill_name, parse_github_url,
     parse_skill_md_content, parse_star_list_url,
 };
-use super::models::{Database, SkillEntry, TapInfo, TapRegistry};
-use crate::paths::get_taps_clone_dir;
+use super::models::{Database, SkillEntry, SkillId, TapInfo, TapRegistry};
+use super::skill::remove_installed_skill_files;
+use crate::paths::{get_skills_install_dir, get_taps_clone_dir};
 use crate::util::truncate_string;
 
 const TAP_URL_MAX_LEN: usize = 50;
@@ -248,8 +249,9 @@ pub fn list_taps() -> Result<()> {
 }
 
 /// Update tap registries (fetch latest from remote)
-pub fn update_tap(name: Option<&str>) -> Result<()> {
+pub fn update_tap(name: Option<&str>, prune: bool) -> Result<()> {
     let mut db = db::init_db()?;
+    let install_dir = get_skills_install_dir()?;
 
     let taps_to_update: Vec<String> = match name {
         Some(n) => {
@@ -292,13 +294,30 @@ pub fn update_tap(name: Option<&str>) -> Result<()> {
                 }
 
                 if !result.removed_installed.is_empty() {
-                    println!(
-                        "\n    {} {} installed skill(s) no longer in tap:",
-                        "!".yellow().bold(),
-                        result.removed_installed.len()
-                    );
-                    for skill in &result.removed_installed {
-                        println!("      skillshub uninstall {}/{}", tap_name, skill);
+                    if prune {
+                        println!("    {} pruned installed skill(s) no longer in tap:", "-".red());
+                        for skill in &result.removed_installed {
+                            let skill_id = SkillId {
+                                tap: tap_name.clone(),
+                                skill: skill.clone(),
+                            };
+                            match remove_installed_skill_files(&mut db, &install_dir, &skill_id) {
+                                Ok(()) => println!("      {} {}/{}", "-".red(), tap_name, skill),
+                                Err(e) => {
+                                    println!("      {} failed to prune {}/{}: {}", "✗".red(), tap_name, skill, e)
+                                }
+                            }
+                        }
+                    } else {
+                        println!(
+                            "\n    {} {} installed skill(s) no longer in tap:",
+                            "!".yellow().bold(),
+                            result.removed_installed.len()
+                        );
+                        for skill in &result.removed_installed {
+                            println!("      skillshub uninstall {}/{}", tap_name, skill);
+                        }
+                        println!("      (or re-run with --prune to remove them automatically)");
                     }
                 }
             }
@@ -813,6 +832,104 @@ mod tests {
 
         assert_eq!(removed, vec!["beta".to_string()]);
         assert_eq!(removed_installed, vec!["beta".to_string()]);
+    }
+
+    /// The prune helper (used by `tap update --prune`) removes only the targeted
+    /// orphan's files and db entry, leaving sibling skills in the same tap intact.
+    #[test]
+    #[serial]
+    fn test_prune_removes_orphan_and_keeps_siblings() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        let home = temp.path().join("home");
+        let skillshub_home = home.join(".skillshub");
+        let skills_dir = skillshub_home.join("skills");
+        let beta_dir = skills_dir.join("test-user/test-repo").join("beta");
+        let alpha_dir = skills_dir.join("test-user/test-repo").join("alpha");
+        fs::create_dir_all(&beta_dir).unwrap();
+        fs::create_dir_all(&alpha_dir).unwrap();
+        fs::create_dir_all(&skillshub_home).unwrap();
+
+        let _guard = TestHomeGuard::set(&home);
+
+        let mut db = Database::default();
+        for skill in ["alpha", "beta"] {
+            db.installed.insert(
+                format!("test-user/test-repo/{}", skill),
+                InstalledSkill {
+                    tap: "test-user/test-repo".to_string(),
+                    skill: skill.to_string(),
+                    commit: None,
+                    installed_at: Utc::now(),
+                    source_url: None,
+                    source_path: None,
+                    gist_updated_at: None,
+                },
+            );
+        }
+
+        let install_dir = get_skills_install_dir().unwrap();
+        let orphan = SkillId {
+            tap: "test-user/test-repo".to_string(),
+            skill: "beta".to_string(),
+        };
+        remove_installed_skill_files(&mut db, &install_dir, &orphan).unwrap();
+
+        // Orphan is gone from disk and db; sibling remains untouched.
+        assert!(!beta_dir.exists(), "orphan dir should be removed");
+        assert!(alpha_dir.exists(), "sibling dir should remain");
+        assert!(!db.installed.contains_key("test-user/test-repo/beta"));
+        assert!(db.installed.contains_key("test-user/test-repo/alpha"));
+        // Tap dir still holds the sibling, so it must not be cleaned up.
+        assert!(skills_dir.join("test-user/test-repo").exists());
+    }
+
+    /// Pruning the last skill in a tap also cleans up the now-empty tap directory.
+    #[test]
+    #[serial]
+    fn test_prune_cleans_empty_tap_dir() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        let home = temp.path().join("home");
+        let skillshub_home = home.join(".skillshub");
+        let skills_dir = skillshub_home.join("skills");
+        let beta_dir = skills_dir.join("test-user/test-repo").join("beta");
+        fs::create_dir_all(&beta_dir).unwrap();
+        fs::create_dir_all(&skillshub_home).unwrap();
+
+        let _guard = TestHomeGuard::set(&home);
+
+        let mut db = Database::default();
+        db.installed.insert(
+            "test-user/test-repo/beta".to_string(),
+            InstalledSkill {
+                tap: "test-user/test-repo".to_string(),
+                skill: "beta".to_string(),
+                commit: None,
+                installed_at: Utc::now(),
+                source_url: None,
+                source_path: None,
+                gist_updated_at: None,
+            },
+        );
+
+        let install_dir = get_skills_install_dir().unwrap();
+        let orphan = SkillId {
+            tap: "test-user/test-repo".to_string(),
+            skill: "beta".to_string(),
+        };
+        remove_installed_skill_files(&mut db, &install_dir, &orphan).unwrap();
+
+        assert!(!beta_dir.exists());
+        assert!(
+            !skills_dir.join("test-user/test-repo").exists(),
+            "empty tap dir should be cleaned up"
+        );
+        assert!(db.installed.is_empty());
     }
 
     #[test]

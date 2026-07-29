@@ -13,6 +13,7 @@ skillshub search <query>                    # Search skills across all taps
 skillshub install <owner/repo/skill>        # Install a skill
 skillshub uninstall <owner/repo/skill>      # Remove installed skill
 skillshub update [owner/repo/skill]         # Update skill(s) to latest
+skillshub update --prune                     # Update all, uninstalling skills removed upstream
 skillshub info <owner/repo/skill>           # Show skill details
 skillshub install-all                       # Install all from all added taps
 ```
@@ -38,6 +39,7 @@ skillshub tap add <owner/repo> --install    # Add tap and install all skills
 skillshub tap remove <owner/repo>           # Remove a tap and uninstall its skills
 skillshub tap remove <owner/repo> --keep-skills  # Remove tap but keep skills installed
 skillshub tap update [owner/repo]           # Refresh tap registry
+skillshub tap update --prune                 # Refresh, uninstalling installed skills no longer in the tap
 skillshub tap install-all <owner/repo>      # Install all skills from a tap
 ```
 
