@@ -38,7 +38,7 @@ pub enum Commands {
         /// Full skill name to update, or omit to update all
         name: Option<String>,
 
-        /// Uninstall installed skills that no longer exist in their tap
+        /// Uninstall installed skills that no longer exist upstream (tap or gist)
         #[arg(long)]
         prune: bool,
     },

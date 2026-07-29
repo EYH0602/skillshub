@@ -478,6 +478,30 @@ pub(crate) fn remove_installed_skill_files(db: &mut Database, install_dir: &Path
     Ok(())
 }
 
+/// Handle a skill that no longer exists upstream: prune it (when `prune`) or
+/// print a notice. Shared by the update flow's cache-miss (default/gist taps)
+/// and fresh-clone-miss (clone-backed taps) paths so both behave identically.
+fn prune_or_report_missing(
+    db: &mut Database,
+    install_dir: &Path,
+    installed: &InstalledSkill,
+    skill_name: &str,
+    prune: bool,
+) {
+    if prune {
+        let skill_id = SkillId {
+            tap: installed.tap.clone(),
+            skill: installed.skill.clone(),
+        };
+        match remove_installed_skill_files(db, install_dir, &skill_id) {
+            Ok(()) => println!("  {} {} (pruned, no longer in tap)", "-".red(), skill_name),
+            Err(e) => println!("  {} {} (prune failed: {})", "✗".red(), skill_name, e),
+        }
+    } else {
+        println!("  {} {} (no longer in tap)", "✗".red(), skill_name);
+    }
+}
+
 /// Update a skill (or all skills) to latest version
 pub fn update_skill(full_name: Option<&str>, prune: bool) -> Result<()> {
     let mut db = db::init_db()?;
@@ -592,28 +616,19 @@ pub fn update_skill(full_name: Option<&str>, prune: bool) -> Result<()> {
             }
         };
 
-        let skill_entry = match registry.skills.get(&installed.skill) {
-            Some(e) => e,
-            None => {
-                if prune {
-                    let skill_id = SkillId {
-                        tap: installed.tap.clone(),
-                        skill: installed.skill.clone(),
-                    };
-                    match remove_installed_skill_files(&mut db, &install_dir, &skill_id) {
-                        Ok(()) => println!("  {} {} (pruned, not in registry)", "-".red(), skill_name),
-                        Err(e) => println!("  {} {} (prune failed: {})", "✗".red(), skill_name, e),
-                    }
-                } else {
-                    println!("  {} {} (not in registry)", "✗".red(), skill_name);
-                }
-                continue;
-            }
-        };
-
-        let install_dir = get_skills_install_dir()?;
-        let dest = install_dir.join(&installed.tap).join(&installed.skill);
         let is_default_tap = tap.is_default || installed.tap == DEFAULT_TAP_NAME;
+        let is_gist_tap = is_gist_url(&tap.url);
+        let dest = install_dir.join(&installed.tap).join(&installed.skill);
+
+        // The default (bundled) tap and gist taps carry an authoritative cached
+        // registry here, so a cache miss is a real "removed upstream" signal and
+        // we decide prune/skip immediately. Clone-backed taps (non-default,
+        // non-gist) may have a stale cache, so their membership is decided
+        // against the freshly pulled clone below — never from the cache.
+        if (is_default_tap || is_gist_tap) && !registry.skills.contains_key(&installed.skill) {
+            prune_or_report_missing(&mut db, &install_dir, &installed, &skill_name, prune);
+            continue;
+        }
 
         // For default tap skills installed locally (commit=None), refresh from local bundled dir.
         // These are never compared by commit SHA, so always attempt a local-first refresh.
@@ -630,9 +645,8 @@ pub fn update_skill(full_name: Option<&str>, prune: bool) -> Result<()> {
             continue;
         }
 
-        // Update from local clone for non-gist, non-default taps
-        if is_gist_url(&tap.url) {
-            // Gist taps without gist_updated_at shouldn't reach here, but guard anyway
+        // Gist taps without gist_updated_at shouldn't reach here, but guard anyway
+        if is_gist_tap {
             println!("  {} {} (unexpected state for gist skill)", "✗".red(), skill_name);
             continue;
         }
@@ -656,6 +670,31 @@ pub fn update_skill(full_name: Option<&str>, prune: bool) -> Result<()> {
             continue;
         }
 
+        // Re-discover skills from the freshly pulled clone — the authoritative
+        // upstream state. Deciding membership here (rather than from the possibly
+        // stale cache) is what lets `update --prune` honor its promise to remove
+        // skills actually removed upstream, and avoids a cryptic copy error when
+        // the cached path no longer exists in the clone.
+        let fresh_registry = match super::tap::discover_skills_from_local(&clone_dir, &installed.tap) {
+            Ok(r) => r,
+            Err(e) => {
+                println!("  {} {} (failed to scan clone: {})", "✗".red(), skill_name, e);
+                continue;
+            }
+        };
+        let skill_path = match fresh_registry.skills.get(&installed.skill) {
+            Some(e) => e.path.clone(),
+            None => {
+                prune_or_report_missing(&mut db, &install_dir, &installed, &skill_name, prune);
+                continue;
+            }
+        };
+        // Refresh the tap's cached registry so `list` and later runs reflect the
+        // freshly observed upstream state.
+        if let Some(t) = db.taps.get_mut(&installed.tap) {
+            t.cached_registry = Some(fresh_registry);
+        }
+
         let new_commit = git_head_sha(&clone_dir).unwrap_or_default();
 
         if installed.commit.as_deref() == Some(&new_commit) {
@@ -664,13 +703,7 @@ pub fn update_skill(full_name: Option<&str>, prune: bool) -> Result<()> {
         }
 
         // Copy updated files from clone
-        match install_from_clone(
-            &installed.tap,
-            &tap.url,
-            &skill_entry.path,
-            &dest,
-            tap.branch.as_deref(),
-        ) {
+        match install_from_clone(&installed.tap, &tap.url, &skill_path, &dest, tap.branch.as_deref()) {
             Ok(commit) => {
                 let old_commit = installed.commit.as_deref().unwrap_or("unknown");
                 if let Some(skill) = db.installed.get_mut(&skill_name) {
@@ -1174,6 +1207,67 @@ fn install_all_from_tap_internal(db: &super::models::Database, tap_name: &str) -
 mod tests {
     use super::*;
     use std::fs;
+
+    /// Build an installed skill and its on-disk directory under `install_dir`.
+    fn seed_installed(db: &mut Database, install_dir: &Path, tap: &str, skill: &str) {
+        fs::create_dir_all(install_dir.join(tap).join(skill)).unwrap();
+        db.installed.insert(
+            format!("{}/{}", tap, skill),
+            InstalledSkill {
+                tap: tap.to_string(),
+                skill: skill.to_string(),
+                commit: None,
+                installed_at: Utc::now(),
+                source_url: None,
+                source_path: None,
+                gist_updated_at: None,
+            },
+        );
+    }
+
+    /// With `prune = true`, a skill missing upstream is removed from disk and db.
+    #[test]
+    fn test_prune_or_report_missing_prunes_when_flag_set() {
+        use tempfile::TempDir;
+        let install_dir = TempDir::new().unwrap();
+
+        let mut db = Database::default();
+        seed_installed(&mut db, install_dir.path(), "test/tap", "beta");
+        let installed = db.installed.get("test/tap/beta").unwrap().clone();
+
+        prune_or_report_missing(&mut db, install_dir.path(), &installed, "test/tap/beta", true);
+
+        assert!(
+            !install_dir.path().join("test/tap/beta").exists(),
+            "orphan dir should be removed"
+        );
+        assert!(
+            !db.installed.contains_key("test/tap/beta"),
+            "orphan db entry should be removed"
+        );
+    }
+
+    /// With `prune = false`, the skill is reported but left installed (files and db entry).
+    #[test]
+    fn test_prune_or_report_missing_keeps_when_flag_unset() {
+        use tempfile::TempDir;
+        let install_dir = TempDir::new().unwrap();
+
+        let mut db = Database::default();
+        seed_installed(&mut db, install_dir.path(), "test/tap", "beta");
+        let installed = db.installed.get("test/tap/beta").unwrap().clone();
+
+        prune_or_report_missing(&mut db, install_dir.path(), &installed, "test/tap/beta", false);
+
+        assert!(
+            install_dir.path().join("test/tap/beta").exists(),
+            "dir should remain without --prune"
+        );
+        assert!(
+            db.installed.contains_key("test/tap/beta"),
+            "db entry should remain without --prune"
+        );
+    }
 
     #[test]
     fn test_install_from_local_nonexistent_skill_returns_error() {
