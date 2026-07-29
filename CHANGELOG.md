@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-07-29
+
+### Added
+
+- `--prune` flag on `skillshub update` and `skillshub tap update`. Opt-in, so
+  default behavior is unchanged (detect and warn only). When set, installed
+  skills that no longer exist upstream are uninstalled automatically — removing
+  the install directory, the `db.installed` entry, and any now-empty tap
+  directory. `skillshub update --prune` covers both tap-sourced and
+  gist-sourced skills. See `docs/prune-orphaned-skills.md`.
+
+### Fixed
+
+- `tap update --prune` no longer silently no-ops when re-run after a plain
+  `tap update`. Orphan detection is now membership-based (installed skills
+  absent from the current registry) instead of a diff against a baseline the
+  same run overwrites, so the "re-run with --prune" hint actually works.
+- `update --prune` for clone-backed taps now decides what to prune against the
+  freshly pulled clone rather than a possibly-stale cache, avoiding both
+  incorrect prunes and a cryptic "skill path not found in local clone" error
+  when a skill was removed upstream.
+
 ## [1.1.0] - 2026-05-07
 
 ### Added
