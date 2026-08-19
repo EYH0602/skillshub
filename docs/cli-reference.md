@@ -25,11 +25,11 @@ skillshub tui                               # Interactive, tap-centric skill man
 
 `skillshub tui` is organized around taps:
 
-1. **Tap list** (top level): pick a tap to enter it, `Update everything` to update all installed skills, or `Quit`.
-2. **Tap view**: `View/manage skills` or `Delete this tap…` (uninstalls all its skills; the default tap cannot be deleted).
+1. **Tap list** (top level): `↑/↓` or `j/k` to move, `Enter` to enter the focused tap, `d` or `Delete` to delete the focused tap (uninstalls all its skills after a `y/N` confirm; the default tap cannot be deleted), plus trailing `Update everything` and `Quit` rows.
+2. **Tap view**: `View/manage skills` or `Delete this tap…` (same deletion flow, reachable from inside the tap too).
 3. **Skill list**: multi-select the tap's skills (space to toggle, type to filter; installed ones are pre-checked), then choose `Uninstall selected` or `Update selected`.
 
-Requires a terminal (TTY); use the subcommands above in scripts. `Esc` backs up one level (exits at the tap list), `Ctrl-C` exits.
+Requires a terminal (TTY); use the subcommands above in scripts. `Esc`/`q` backs up one level (exits at the tap list), `Ctrl-C` exits.
 
 Confirmation friction scales with blast radius: scoped deletes (uninstalling skills, deleting a tap) use a `y/N` confirm defaulting to No, while full-state deletion (`clean all`) requires typing `yes`. The difference is intentional.
 

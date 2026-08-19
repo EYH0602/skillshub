@@ -1,14 +1,17 @@
 use anyhow::Result;
 use colored::Colorize;
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::style::Print;
+use crossterm::{cursor, queue, terminal};
 use inquire::error::InquireError;
 use inquire::{Confirm, MultiSelect, Select};
-use std::io::IsTerminal;
+use std::io::{IsTerminal, Write};
 
 use crate::paths::get_skills_install_dir;
 use crate::registry::db::{self, init_db, save_db};
 use crate::registry::models::Database;
 use crate::registry::skill::remove_installed_skills_batch;
-use crate::registry::tap::{get_tap_registry, list_tap_summaries, remove_tap};
+use crate::registry::tap::{get_tap_registry, list_tap_summaries, remove_tap, TapSummary};
 use crate::registry::{update_skill, UpdateSelection};
 
 const UPDATE_EVERYTHING: &str = "Update everything";
@@ -35,25 +38,144 @@ pub fn run_tui() -> Result<()> {
             return Ok(());
         }
 
-        let mut options: Vec<String> = summaries.iter().map(|s| s.picker_label()).collect();
-        options.push(UPDATE_EVERYTHING.to_string());
-        options.push(QUIT.to_string());
-
-        match Select::new("Select a tap (Enter to view its skills)", options).prompt() {
-            Ok(choice) if choice == UPDATE_EVERYTHING => update_skill(UpdateSelection::All, false)?,
-            Ok(choice) if choice == QUIT => break,
-            Ok(choice) => {
-                if let Some(summary) = summaries.iter().find(|s| s.picker_label() == choice) {
-                    tap_view(&summary.name)?;
-                }
-            }
-            Err(InquireError::OperationCanceled) => break,
-            Err(InquireError::OperationInterrupted) => std::process::exit(130),
-            Err(e) => return Err(e.into()),
+        match tap_picker(&summaries)? {
+            PickerOutcome::Drill(name) => tap_view(&name)?,
+            PickerOutcome::Delete(name) => delete_tap_flow(&name)?,
+            PickerOutcome::UpdateAll => update_skill(UpdateSelection::All, false)?,
+            PickerOutcome::Quit => break,
         }
     }
 
     Ok(())
+}
+
+/// One row in the top-level tap picker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PickerRow {
+    Tap(String),
+    UpdateEverything,
+    Quit,
+}
+
+/// What the tap picker resolved to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PickerOutcome {
+    /// Drill into a tap's view (skill management / tap deletion).
+    Drill(String),
+    /// Delete the focused tap outright (after confirmation).
+    Delete(String),
+    UpdateAll,
+    Quit,
+}
+
+fn picker_rows(summaries: &[TapSummary]) -> Vec<PickerRow> {
+    let mut rows: Vec<PickerRow> = summaries.iter().map(|s| PickerRow::Tap(s.name.clone())).collect();
+    rows.push(PickerRow::UpdateEverything);
+    rows.push(PickerRow::Quit);
+    rows
+}
+
+/// Pure key handling for the tap picker. `Some` ends the picker with an
+/// outcome; `None` continues (possibly after moving the cursor).
+fn handle_picker_key(rows: &[PickerRow], cursor: &mut usize, key: KeyEvent) -> Option<PickerOutcome> {
+    match key.code {
+        KeyCode::Up | KeyCode::Char('k') => {
+            *cursor = cursor.saturating_sub(1);
+            None
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if *cursor + 1 < rows.len() {
+                *cursor += 1;
+            }
+            None
+        }
+        KeyCode::Enter => Some(match &rows[*cursor] {
+            PickerRow::Tap(name) => PickerOutcome::Drill(name.clone()),
+            PickerRow::UpdateEverything => PickerOutcome::UpdateAll,
+            PickerRow::Quit => PickerOutcome::Quit,
+        }),
+        KeyCode::Delete | KeyCode::Char('d') => match &rows[*cursor] {
+            PickerRow::Tap(name) => Some(PickerOutcome::Delete(name.clone())),
+            _ => None,
+        },
+        KeyCode::Esc | KeyCode::Char('q') => Some(PickerOutcome::Quit),
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => std::process::exit(130),
+        _ => None,
+    }
+}
+
+fn render_picker(
+    out: &mut impl Write,
+    summaries: &[TapSummary],
+    rows: &[PickerRow],
+    cursor: usize,
+    prev_lines: u16,
+) -> Result<u16> {
+    if prev_lines > 0 {
+        queue!(out, cursor::MoveUp(prev_lines))?;
+    }
+    queue!(out, terminal::Clear(terminal::ClearType::FromCursorDown))?;
+    queue!(
+        out,
+        Print("Select a tap (↑/↓ or j/k move, Enter view, d/Delete delete, q quit)\r\n")
+    )?;
+    let mut lines: u16 = 1;
+    for (i, row) in rows.iter().enumerate() {
+        let label = match row {
+            PickerRow::Tap(name) => summaries
+                .iter()
+                .find(|s| &s.name == name)
+                .map(|s| s.picker_label())
+                .unwrap_or_else(|| name.clone()),
+            PickerRow::UpdateEverything => UPDATE_EVERYTHING.to_string(),
+            PickerRow::Quit => QUIT.to_string(),
+        };
+        let marker = if i == cursor { ">" } else { " " };
+        queue!(out, Print(format!("{} {}\r\n", marker, label)))?;
+        lines += 1;
+    }
+    out.flush()?;
+    Ok(lines)
+}
+
+/// Top-level tap picker with row-level key actions (inquire cannot bind
+/// arbitrary keys to list rows, so this level uses crossterm directly).
+fn tap_picker(summaries: &[TapSummary]) -> Result<PickerOutcome> {
+    let rows = picker_rows(summaries);
+    let mut cursor = 0usize;
+    let mut stdout = std::io::stdout();
+
+    terminal::enable_raw_mode()?;
+    let result = picker_event_loop(&mut stdout, summaries, &rows, &mut cursor);
+    terminal::disable_raw_mode()?;
+
+    result
+}
+
+fn picker_event_loop(
+    out: &mut impl Write,
+    summaries: &[TapSummary],
+    rows: &[PickerRow],
+    cursor: &mut usize,
+) -> Result<PickerOutcome> {
+    let mut prev_lines = render_picker(out, summaries, rows, *cursor, 0)?;
+    loop {
+        if let Event::Key(key) = event::read()? {
+            if key.kind == KeyEventKind::Release {
+                continue;
+            }
+            if let Some(outcome) = handle_picker_key(rows, cursor, key) {
+                queue!(
+                    out,
+                    cursor::MoveUp(prev_lines),
+                    terminal::Clear(terminal::ClearType::FromCursorDown)
+                )?;
+                out.flush()?;
+                return Ok(outcome);
+            }
+            prev_lines = render_picker(out, summaries, rows, *cursor, prev_lines)?;
+        }
+    }
 }
 
 /// Classify a prompt error inside a flow: Esc returns up one level, Ctrl-C exits.
@@ -344,6 +466,103 @@ mod tests {
             "Delete tap 'owner/repo' and uninstall its 3 skill(s)?"
         );
         assert_eq!(delete_confirm_prompt("owner/repo", 0), "Delete tap 'owner/repo'?");
+    }
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn test_rows() -> Vec<PickerRow> {
+        vec![
+            PickerRow::Tap("a/one".to_string()),
+            PickerRow::Tap("b/two".to_string()),
+            PickerRow::UpdateEverything,
+            PickerRow::Quit,
+        ]
+    }
+
+    #[test]
+    fn delete_key_on_tap_row_deletes_that_tap() {
+        let rows = test_rows();
+        let mut cursor = 1;
+
+        assert_eq!(
+            handle_picker_key(&rows, &mut cursor, key(KeyCode::Delete)),
+            Some(PickerOutcome::Delete("b/two".to_string()))
+        );
+
+        let mut cursor = 0;
+        assert_eq!(
+            handle_picker_key(&rows, &mut cursor, key(KeyCode::Char('d'))),
+            Some(PickerOutcome::Delete("a/one".to_string()))
+        );
+    }
+
+    #[test]
+    fn delete_key_on_non_tap_rows_is_noop() {
+        let rows = test_rows();
+
+        let mut cursor = 2;
+        assert_eq!(handle_picker_key(&rows, &mut cursor, key(KeyCode::Delete)), None);
+        assert_eq!(handle_picker_key(&rows, &mut cursor, key(KeyCode::Char('d'))), None);
+
+        let mut cursor = 3;
+        assert_eq!(handle_picker_key(&rows, &mut cursor, key(KeyCode::Delete)), None);
+    }
+
+    #[test]
+    fn enter_resolves_row_outcomes() {
+        let rows = test_rows();
+
+        let mut cursor = 0;
+        assert_eq!(
+            handle_picker_key(&rows, &mut cursor, key(KeyCode::Enter)),
+            Some(PickerOutcome::Drill("a/one".to_string()))
+        );
+
+        let mut cursor = 2;
+        assert_eq!(
+            handle_picker_key(&rows, &mut cursor, key(KeyCode::Enter)),
+            Some(PickerOutcome::UpdateAll)
+        );
+
+        let mut cursor = 3;
+        assert_eq!(
+            handle_picker_key(&rows, &mut cursor, key(KeyCode::Enter)),
+            Some(PickerOutcome::Quit)
+        );
+    }
+
+    #[test]
+    fn movement_clamps_to_row_bounds() {
+        let rows = test_rows();
+        let mut cursor = 0;
+
+        assert_eq!(handle_picker_key(&rows, &mut cursor, key(KeyCode::Up)), None);
+        assert_eq!(cursor, 0);
+
+        for _ in 0..10 {
+            handle_picker_key(&rows, &mut cursor, key(KeyCode::Char('j')));
+        }
+        assert_eq!(cursor, rows.len() - 1);
+
+        handle_picker_key(&rows, &mut cursor, key(KeyCode::Char('k')));
+        assert_eq!(cursor, rows.len() - 2);
+    }
+
+    #[test]
+    fn esc_and_q_quit() {
+        let rows = test_rows();
+        let mut cursor = 0;
+
+        assert_eq!(
+            handle_picker_key(&rows, &mut cursor, key(KeyCode::Esc)),
+            Some(PickerOutcome::Quit)
+        );
+        assert_eq!(
+            handle_picker_key(&rows, &mut cursor, key(KeyCode::Char('q'))),
+            Some(PickerOutcome::Quit)
+        );
     }
 
     #[test]

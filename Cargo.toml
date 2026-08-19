@@ -42,6 +42,7 @@ reqwest = { version = "0.11", features = ["json", "blocking"] }
 chrono = { version = "0.4", features = ["serde"] }
 walkdir = "2.5.0"
 inquire = "0.9"
+crossterm = "0.29"
 
 [dependencies.tempfile]
 version = "3.10"
