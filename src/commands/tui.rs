@@ -38,11 +38,17 @@ pub fn run_tui() -> Result<()> {
             return Ok(());
         }
 
-        match tap_picker(&summaries)? {
-            PickerOutcome::Drill(name) => tap_view(&name)?,
-            PickerOutcome::Delete(name) => delete_tap_flow(&name)?,
-            PickerOutcome::UpdateAll => update_skill(UpdateSelection::All, false)?,
+        // Operational errors are reported and the session stays alive; only the
+        // genuinely fatal ones (init_db, the picker itself) propagate.
+        let action_result = match tap_picker(&summaries)? {
+            PickerOutcome::Drill(name) => tap_view(&name),
+            PickerOutcome::Delete(name) => delete_tap_flow(&name).map(|_| ()),
+            PickerOutcome::UpdateAll => update_skill(UpdateSelection::All, false),
             PickerOutcome::Quit => break,
+            PickerOutcome::Interrupted => unreachable!("tap_picker exits on Interrupted"),
+        };
+        if let Err(e) = action_result {
+            eprintln!("{} {:#}", "✗".red(), e);
         }
     }
 
@@ -66,6 +72,8 @@ enum PickerOutcome {
     Delete(String),
     UpdateAll,
     Quit,
+    /// Ctrl-C pressed: restore the terminal first, then exit like SIGINT (130).
+    Interrupted,
 }
 
 fn picker_rows(summaries: &[TapSummary]) -> Vec<PickerRow> {
@@ -75,15 +83,38 @@ fn picker_rows(summaries: &[TapSummary]) -> Vec<PickerRow> {
     rows
 }
 
+/// If the focused row is a tap, resolve to deleting it; otherwise no-op.
+fn delete_focused(rows: &[PickerRow], cursor: usize) -> Option<PickerOutcome> {
+    match &rows[cursor] {
+        PickerRow::Tap(name) => Some(PickerOutcome::Delete(name.clone())),
+        _ => None,
+    }
+}
+
 /// Pure key handling for the tap picker. `Some` ends the picker with an
 /// outcome; `None` continues (possibly after moving the cursor).
 fn handle_picker_key(rows: &[PickerRow], cursor: &mut usize, key: KeyEvent) -> Option<PickerOutcome> {
+    // In raw mode Ctrl combos arrive as Char with CONTROL set (Ctrl-C is not
+    // SIGINT). Plain-character bindings must not fire on them: Ctrl-D is a
+    // habitual "get me out" gesture and must not trigger tap deletion.
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     match key.code {
-        KeyCode::Up | KeyCode::Char('k') => {
+        KeyCode::Char('c') if ctrl => Some(PickerOutcome::Interrupted),
+        KeyCode::Up => {
             *cursor = cursor.saturating_sub(1);
             None
         }
-        KeyCode::Down | KeyCode::Char('j') => {
+        KeyCode::Char('k') if !ctrl => {
+            *cursor = cursor.saturating_sub(1);
+            None
+        }
+        KeyCode::Down => {
+            if *cursor + 1 < rows.len() {
+                *cursor += 1;
+            }
+            None
+        }
+        KeyCode::Char('j') if !ctrl => {
             if *cursor + 1 < rows.len() {
                 *cursor += 1;
             }
@@ -94,33 +125,60 @@ fn handle_picker_key(rows: &[PickerRow], cursor: &mut usize, key: KeyEvent) -> O
             PickerRow::UpdateEverything => PickerOutcome::UpdateAll,
             PickerRow::Quit => PickerOutcome::Quit,
         }),
-        KeyCode::Delete | KeyCode::Backspace | KeyCode::Char('d') => match &rows[*cursor] {
-            PickerRow::Tap(name) => Some(PickerOutcome::Delete(name.clone())),
-            _ => None,
-        },
-        KeyCode::Esc | KeyCode::Char('q') => Some(PickerOutcome::Quit),
-        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => std::process::exit(130),
+        KeyCode::Delete | KeyCode::Backspace => delete_focused(rows, *cursor),
+        KeyCode::Char('d') if !ctrl => delete_focused(rows, *cursor),
+        KeyCode::Esc => Some(PickerOutcome::Quit),
+        KeyCode::Char('q') if !ctrl => Some(PickerOutcome::Quit),
         _ => None,
     }
 }
 
+const HEADER: &str = "Select a tap (↑/↓ or j/k move, Enter view, d/Del/⌫ delete, q quit)";
+
+/// Truncate to at most `max` chars so a row never wraps to a second physical
+/// line — the redraw accounting counts one line per printed row.
+fn truncate_to_width(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        s.chars()
+            .take(max.saturating_sub(1))
+            .chain(std::iter::once('…'))
+            .collect()
+    }
+}
+
+/// Render one picker frame and return how many physical lines it occupies.
+///
+/// The returned count must equal the number of `\r\n` emitted: the next frame
+/// rewinds with `MoveUp(prev_lines)` + `Clear(FromCursorDown)`, so a mismatch
+/// would erase the user's scrollback above the picker. Rows are truncated to
+/// the terminal width (no wrapping) and windowed to a viewport around the
+/// cursor that never exceeds the terminal height.
 fn render_picker(
     out: &mut impl Write,
     summaries: &[TapSummary],
     rows: &[PickerRow],
     cursor: usize,
     prev_lines: u16,
+    term_size: (u16, u16),
 ) -> Result<u16> {
+    let (cols, term_rows) = term_size;
+    let width = (cols as usize).max(1);
+    // Reserve one line for the header.
+    let max_rows = (term_rows as usize).saturating_sub(1).max(1);
+
+    // Scroll the window only when the cursor moves past its bottom edge.
+    let start = if cursor >= max_rows { cursor + 1 - max_rows } else { 0 };
+    let end = (start + max_rows).min(rows.len());
+
     if prev_lines > 0 {
         queue!(out, cursor::MoveUp(prev_lines))?;
     }
     queue!(out, terminal::Clear(terminal::ClearType::FromCursorDown))?;
-    queue!(
-        out,
-        Print("Select a tap (↑/↓ or j/k move, Enter view, d/Del/⌫ delete, q quit)\r\n")
-    )?;
+    queue!(out, Print(format!("{}\r\n", truncate_to_width(HEADER, width))))?;
     let mut lines: u16 = 1;
-    for (i, row) in rows.iter().enumerate() {
+    for (i, row) in rows.iter().enumerate().take(end).skip(start) {
         let label = match row {
             PickerRow::Tap(name) => summaries
                 .iter()
@@ -131,11 +189,34 @@ fn render_picker(
             PickerRow::Quit => QUIT.to_string(),
         };
         let marker = if i == cursor { ">" } else { " " };
-        queue!(out, Print(format!("{} {}\r\n", marker, label)))?;
+        queue!(
+            out,
+            Print(format!(
+                "{}\r\n",
+                truncate_to_width(&format!("{} {}", marker, label), width)
+            ))
+        )?;
         lines += 1;
     }
     out.flush()?;
     Ok(lines)
+}
+
+/// RAII guard restoring the terminal to cooked mode on drop, so a panic
+/// inside the picker can't leave the user's shell in raw mode.
+struct RawModeGuard;
+
+impl RawModeGuard {
+    fn new() -> Result<Self> {
+        terminal::enable_raw_mode()?;
+        Ok(Self)
+    }
+}
+
+impl Drop for RawModeGuard {
+    fn drop(&mut self) {
+        let _ = terminal::disable_raw_mode();
+    }
 }
 
 /// Top-level tap picker with row-level key actions (inquire cannot bind
@@ -145,9 +226,14 @@ fn tap_picker(summaries: &[TapSummary]) -> Result<PickerOutcome> {
     let mut cursor = 0usize;
     let mut stdout = std::io::stdout();
 
-    terminal::enable_raw_mode()?;
+    let guard = RawModeGuard::new()?;
     let result = picker_event_loop(&mut stdout, summaries, &rows, &mut cursor);
-    terminal::disable_raw_mode()?;
+    // Restore the terminal before any exit path.
+    drop(guard);
+
+    if matches!(result, Ok(PickerOutcome::Interrupted)) {
+        std::process::exit(130);
+    }
 
     result
 }
@@ -158,27 +244,36 @@ fn picker_event_loop(
     rows: &[PickerRow],
     cursor: &mut usize,
 ) -> Result<PickerOutcome> {
-    let mut prev_lines = render_picker(out, summaries, rows, *cursor, 0)?;
+    let term_size = || terminal::size().unwrap_or((80, 24));
+    let mut prev_lines = render_picker(out, summaries, rows, *cursor, 0, term_size())?;
     loop {
-        if let Event::Key(key) = event::read()? {
-            if key.kind == KeyEventKind::Release {
-                continue;
+        match event::read()? {
+            Event::Key(key) => {
+                if key.kind == KeyEventKind::Release {
+                    continue;
+                }
+                if let Some(outcome) = handle_picker_key(rows, cursor, key) {
+                    queue!(
+                        out,
+                        cursor::MoveUp(prev_lines),
+                        terminal::Clear(terminal::ClearType::FromCursorDown)
+                    )?;
+                    out.flush()?;
+                    return Ok(outcome);
+                }
+                prev_lines = render_picker(out, summaries, rows, *cursor, prev_lines, term_size())?;
             }
-            if let Some(outcome) = handle_picker_key(rows, cursor, key) {
-                queue!(
-                    out,
-                    cursor::MoveUp(prev_lines),
-                    terminal::Clear(terminal::ClearType::FromCursorDown)
-                )?;
-                out.flush()?;
-                return Ok(outcome);
+            // Redraw on resize so the frame matches the new dimensions.
+            Event::Resize(_, _) => {
+                prev_lines = render_picker(out, summaries, rows, *cursor, prev_lines, term_size())?;
             }
-            prev_lines = render_picker(out, summaries, rows, *cursor, prev_lines)?;
+            _ => {}
         }
     }
 }
 
-/// Classify a prompt error inside a flow: Esc returns up one level, Ctrl-C exits.
+/// Classify a prompt error inside a flow: Esc cancels the current prompt
+/// (back to the parent view), Ctrl-C exits.
 fn handle_prompt_error(e: InquireError) -> Result<()> {
     match e {
         InquireError::OperationCanceled => Ok(()),
@@ -187,39 +282,53 @@ fn handle_prompt_error(e: InquireError) -> Result<()> {
     }
 }
 
-/// Actions available on a tap.
+/// Actions available on a tap. Loops so that Esc inside a child flow
+/// (skill manager, delete confirm) redisplays this view — Esc backs up
+/// exactly one level.
 fn tap_view(tap_name: &str) -> Result<()> {
-    let options = vec![VIEW_SKILLS, DELETE_TAP, BACK];
+    loop {
+        let options = vec![VIEW_SKILLS, DELETE_TAP, BACK];
 
-    match Select::new(&format!("Tap: {}", tap_name), options).prompt() {
-        Ok(VIEW_SKILLS) => manage_skills(tap_name),
-        Ok(DELETE_TAP) => delete_tap_flow(tap_name),
-        Ok(_) => Ok(()),
-        Err(e) => handle_prompt_error(e),
+        match Select::new(&format!("Tap: {}", tap_name), options).prompt() {
+            Ok(VIEW_SKILLS) => manage_skills(tap_name)?,
+            Ok(DELETE_TAP) => {
+                if delete_tap_flow(tap_name)? {
+                    // The tap is gone; back out to the tap list.
+                    return Ok(());
+                }
+            }
+            Ok(_) => return Ok(()),
+            Err(e) => return handle_prompt_error(e),
+        }
     }
 }
 
 /// Interactive flow to delete a whole tap (uninstalling its skills).
-fn delete_tap_flow(tap_name: &str) -> Result<()> {
+/// Returns `true` when the tap was actually deleted.
+fn delete_tap_flow(tap_name: &str) -> Result<bool> {
     let db = init_db()?;
 
     if db::get_tap(&db, tap_name).map(|t| t.is_default).unwrap_or(false) {
         println!("Cannot delete the default tap '{}'.", tap_name);
-        return Ok(());
+        return Ok(false);
     }
 
     let prompt = delete_confirm_prompt(tap_name, db::get_skills_from_tap(&db, tap_name).len());
 
     let confirmed = match Confirm::new(&prompt).with_default(false).prompt() {
         Ok(c) => c,
-        Err(e) => return handle_prompt_error(e),
+        Err(e) => {
+            handle_prompt_error(e)?;
+            return Ok(false);
+        }
     };
 
     if !confirmed {
-        return Ok(());
+        return Ok(false);
     }
 
-    remove_tap(tap_name, false)
+    remove_tap(tap_name, false)?;
+    Ok(true)
 }
 
 /// Blast-radius-aware confirm message for tap deletion.
@@ -344,7 +453,7 @@ fn manage_skills(tap_name: &str) -> Result<()> {
 
     let action = match Select::new(
         "What do you want to do with the selected skills?",
-        vec![UNINSTALL_SELECTED, UPDATE_SELECTED, CANCEL],
+        vec![CANCEL, UPDATE_SELECTED, UNINSTALL_SELECTED],
     )
     .prompt()
     {
@@ -363,7 +472,7 @@ fn manage_skills(tap_name: &str) -> Result<()> {
             };
 
             let count = plan.len();
-            let confirmed = match Confirm::new(&format!("Uninstall {} skills?", count))
+            let confirmed = match Confirm::new(&format!("Uninstall {} skill(s): {}?", count, plan.join(", ")))
                 .with_default(false)
                 .prompt()
             {
@@ -379,6 +488,18 @@ fn manage_skills(tap_name: &str) -> Result<()> {
             let install_dir = get_skills_install_dir()?;
             let results = remove_installed_skills_batch(&mut db, &install_dir, &plan);
 
+            // Persist before announcing: if the save fails, the success lines
+            // must not have been printed yet, and the session stays alive with
+            // an actionable message.
+            if let Err(e) = save_db(&db) {
+                eprintln!(
+                    "{} Skills were removed from disk but the database could not be updated: {}\n  Re-run the uninstall once the error is fixed to reconcile.",
+                    "✗".red(),
+                    e
+                );
+                return Ok(());
+            }
+
             let mut succeeded = 0usize;
             for (name, result) in &results {
                 match result {
@@ -390,9 +511,10 @@ fn manage_skills(tap_name: &str) -> Result<()> {
                 }
             }
 
-            save_db(&db)?;
-
             println!("Uninstalled {} of {} skills", succeeded, count);
+            if succeeded < count {
+                println!("  {} Re-run to retry the failed skill(s).", "!".yellow());
+            }
             Ok(())
         }
         UPDATE_SELECTED => {
@@ -570,6 +692,101 @@ mod tests {
             handle_picker_key(&rows, &mut cursor, key(KeyCode::Char('q'))),
             Some(PickerOutcome::Quit)
         );
+    }
+
+    #[test]
+    fn ctrl_c_returns_interrupted_instead_of_exiting() {
+        let rows = test_rows();
+        let mut cursor = 0;
+
+        assert_eq!(
+            handle_picker_key(
+                &rows,
+                &mut cursor,
+                KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)
+            ),
+            Some(PickerOutcome::Interrupted)
+        );
+    }
+
+    #[test]
+    fn ctrl_modified_chars_do_not_fire_plain_char_bindings() {
+        let rows = test_rows();
+
+        for ch in ['d', 'q', 'j', 'k'] {
+            let mut cursor = 0;
+            assert_eq!(
+                handle_picker_key(
+                    &rows,
+                    &mut cursor,
+                    KeyEvent::new(KeyCode::Char(ch), KeyModifiers::CONTROL)
+                ),
+                None,
+                "Ctrl-{} must not trigger the plain '{}' binding",
+                ch,
+                ch
+            );
+            assert_eq!(cursor, 0, "Ctrl-{} must not move the cursor", ch);
+        }
+    }
+
+    fn summary(name: &str) -> TapSummary {
+        TapSummary {
+            name: name.to_string(),
+            is_default: false,
+            installed_count: 0,
+            available_count: None,
+        }
+    }
+
+    #[test]
+    fn render_line_count_matches_emitted_lines() {
+        let summaries = vec![summary("a/one"), summary("b/two")];
+        let rows = test_rows();
+        let mut out = Vec::new();
+
+        let lines = render_picker(&mut out, &summaries, &rows, 1, 0, (80, 24)).unwrap();
+        let text = String::from_utf8(out).unwrap();
+
+        assert_eq!(lines as usize, rows.len() + 1);
+        assert_eq!(
+            text.matches("\r\n").count(),
+            lines as usize,
+            "returned count must equal the number of emitted lines"
+        );
+        assert!(text.contains("> b/two"), "focused row must carry the '>' marker");
+    }
+
+    #[test]
+    fn render_windows_rows_to_terminal_height() {
+        let summaries: Vec<TapSummary> = (0..10).map(|i| summary(&format!("t{}/tap", i))).collect();
+        let rows: Vec<PickerRow> = summaries.iter().map(|s| PickerRow::Tap(s.name.clone())).collect();
+        let mut out = Vec::new();
+
+        // Terminal height 5 => header + a 4-row window around the cursor.
+        let lines = render_picker(&mut out, &summaries, &rows, 7, 0, (80, 5)).unwrap();
+        let text = String::from_utf8(out).unwrap();
+
+        assert_eq!(lines, 5);
+        assert!(text.contains("> t7/tap"), "focused row must be in the viewport");
+        assert!(text.contains("t6/tap"));
+        assert!(!text.contains("t0/tap"), "rows above the window must not render");
+    }
+
+    #[test]
+    fn render_truncates_rows_to_terminal_width() {
+        let summaries = vec![summary("a-very-long-owner-name/a-very-long-tap-name")];
+        let rows = vec![PickerRow::Tap(summaries[0].name.clone())];
+        let mut out = Vec::new();
+
+        let lines = render_picker(&mut out, &summaries, &rows, 0, 0, (20, 24)).unwrap();
+        let text = String::from_utf8(out).unwrap();
+
+        assert_eq!(lines, 2, "truncated rows still occupy exactly one line each");
+        // First segment also carries the Clear escape sequence; check the row line.
+        let row = text.split("\r\n").nth(1).unwrap();
+        assert!(row.chars().count() <= 20, "row must fit the terminal width: {:?}", row);
+        assert!(row.ends_with('…'));
     }
 
     #[test]

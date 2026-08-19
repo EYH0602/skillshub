@@ -15,7 +15,8 @@ skillshub/
 │   │   ├── clean.rs            # Clean cache and links
 │   │   ├── doctor.rs           # Diagnostic checks (skillshub doctor)
 │   │   ├── external.rs         # External skills management
-│   │   └── link.rs             # Link skills to agents
+│   │   ├── link.rs             # Link skills to agents
+│   │   └── tui.rs              # Interactive tap/skill manager (skillshub tui)
 │   └── registry/               # Tap-based registry system
 │       ├── mod.rs
 │       ├── models.rs           # Data structures (TapInfo, InstalledSkill, etc.)

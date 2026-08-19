@@ -2,7 +2,7 @@
 name = "skillshub"
 version = "1.2.0"
 edition = "2021"
-rust-version = "1.80.0"
+rust-version = "1.85.0"
 description = "A package manager for AI coding agent skills - like homebrew for skills"
 authors = ["Yifeng He <yfhe.cs@gmail.com>"]
 license = "MIT"

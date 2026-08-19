@@ -18,7 +18,7 @@ Install skills once and link them to every detected agent so all of your agents 
 
 ### From Cargo (recommended)
 
-Requires Rust 1.80 or later.
+Requires Rust 1.85 or later.
 
 ```bash
 cargo install skillshub

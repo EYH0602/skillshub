@@ -491,11 +491,10 @@ pub(crate) fn remove_installed_skills_batch(
 pub(crate) fn remove_installed_skill_files(db: &mut Database, install_dir: &Path, skill_id: &SkillId) -> Result<()> {
     let skill_path = install_dir.join(&skill_id.tap).join(&skill_id.skill);
 
-    // Remove agent symlinks too, so uninstall doesn't leave dangling links behind.
-    remove_agent_symlinks(skill_id, install_dir);
-
+    // Remove the files first; agent symlinks come after, so a failed removal
+    // doesn't strip links from a skill that is still installed.
     if skill_path.exists() {
-        std::fs::remove_dir_all(&skill_path)?;
+        std::fs::remove_dir_all(&skill_path).with_context(|| format!("Failed to remove {}", skill_path.display()))?;
     }
 
     // Clean up empty tap directory
@@ -503,6 +502,9 @@ pub(crate) fn remove_installed_skill_files(db: &mut Database, install_dir: &Path
     if tap_dir.exists() && tap_dir.read_dir()?.next().is_none() {
         std::fs::remove_dir(&tap_dir)?;
     }
+
+    // Remove agent symlinks too, so uninstall doesn't leave dangling links behind.
+    remove_agent_symlinks(skill_id, install_dir);
 
     db::remove_installed_skill(db, &skill_id.full_name());
 
@@ -515,36 +517,54 @@ fn remove_agent_symlinks(skill_id: &SkillId, install_dir: &Path) {
         .iter()
         .map(|a| a.path.join(a.skills_subdir))
         .collect();
-    remove_agent_symlinks_in(&agent_skill_dirs, &skill_id.skill, install_dir);
+    let expected = install_dir.join(&skill_id.tap).join(&skill_id.skill);
+    remove_agent_symlinks_in(&agent_skill_dirs, &skill_id.skill, &expected);
 }
 
 /// Remove skillshub-managed symlinks named `link_name` from the given directories.
 ///
-/// Only entries that ARE symlinks AND whose (absolutized) target starts with
-/// `install_dir` are removed — real directories and symlinks pointing elsewhere
-/// (user-owned / external) are left untouched. Best-effort: individual removal
-/// errors are ignored so a batch uninstall is never aborted.
-fn remove_agent_symlinks_in(agent_skill_dirs: &[PathBuf], link_name: &str, install_dir: &Path) {
+/// Only entries that ARE symlinks AND whose (absolutized) target is exactly
+/// `expected` are removed. An exact match — not an install-dir prefix — because
+/// link names are not tap-qualified: `tapA/pdf` and `tapB/pdf` share one link
+/// name, and uninstalling one must not delete the other's link. Best-effort:
+/// individual failures warn and the batch continues.
+fn remove_agent_symlinks_in(agent_skill_dirs: &[PathBuf], link_name: &str, expected: &Path) {
     for dir in agent_skill_dirs {
         let link_path = dir.join(link_name);
 
         // symlink_metadata does not follow links, so it also sees dangling ones.
-        let Ok(meta) = std::fs::symlink_metadata(&link_path) else {
-            continue;
+        let meta = match std::fs::symlink_metadata(&link_path) {
+            Ok(m) => m,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => {
+                eprintln!("  {} Failed to inspect {}: {}", "!".red(), link_path.display(), e);
+                continue;
+            }
         };
         if !meta.file_type().is_symlink() {
             continue;
         }
 
-        let Ok(target) = std::fs::read_link(&link_path) else {
-            continue;
+        let target = match std::fs::read_link(&link_path) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("  {} Failed to read link {}: {}", "!".red(), link_path.display(), e);
+                continue;
+            }
         };
         // Do NOT canonicalize the target: after the skill files are deleted the
         // target dangles and canonicalize fails. Absolutize relative targets
         // against the link's directory and compare raw paths instead.
         let abs_target = if target.is_absolute() { target } else { dir.join(target) };
-        if abs_target.starts_with(install_dir) {
-            let _ = std::fs::remove_file(&link_path);
+        if abs_target == expected {
+            if let Err(e) = std::fs::remove_file(&link_path) {
+                eprintln!(
+                    "  {} Failed to remove {}: {}\n    Run `skillshub clean links` to remove dangling links.",
+                    "!".red(),
+                    link_path.display(),
+                    e
+                );
+            }
         }
     }
 }
@@ -1348,30 +1368,78 @@ mod tests {
 
         let agent_skills = agent_dir.path().join("skills");
 
-        // Managed symlink (points into install_dir) -> removed
+        // Managed symlink (points at the exact skill being removed) -> removed
         make_symlink(&skill_dir, &agent_skills.join("managed"));
         // Dangling managed symlink (target gone) -> still removed
         make_symlink(&install_dir.path().join("tap/gone"), &agent_skills.join("dangling"));
+        // Symlink into install_dir but at a *different* skill -> kept
+        // (cross-tap basename collision must not delete another tap's link)
+        make_symlink(&install_dir.path().join("tap/other"), &agent_skills.join("collision"));
         // External symlink (points outside install_dir) -> kept
         let outside = TempDir::new().unwrap();
         make_symlink(outside.path(), &agent_skills.join("external"));
         // Real directory with same name -> kept
         fs::create_dir_all(agent_skills.join("realdir")).unwrap();
 
-        remove_agent_symlinks_in(std::slice::from_ref(&agent_skills), "managed", install_dir.path());
-        remove_agent_symlinks_in(std::slice::from_ref(&agent_skills), "dangling", install_dir.path());
-        remove_agent_symlinks_in(std::slice::from_ref(&agent_skills), "external", install_dir.path());
-        remove_agent_symlinks_in(std::slice::from_ref(&agent_skills), "realdir", install_dir.path());
+        remove_agent_symlinks_in(std::slice::from_ref(&agent_skills), "managed", &skill_dir);
+        remove_agent_symlinks_in(
+            std::slice::from_ref(&agent_skills),
+            "dangling",
+            &install_dir.path().join("tap/gone"),
+        );
+        remove_agent_symlinks_in(
+            std::slice::from_ref(&agent_skills),
+            "collision",
+            &install_dir.path().join("tap/myskill"),
+        );
+        remove_agent_symlinks_in(std::slice::from_ref(&agent_skills), "external", &skill_dir);
+        remove_agent_symlinks_in(std::slice::from_ref(&agent_skills), "realdir", &skill_dir);
 
         assert!(agent_skills.join("managed").symlink_metadata().is_err());
         assert!(agent_skills.join("dangling").symlink_metadata().is_err());
+        assert!(
+            agent_skills.join("collision").symlink_metadata().is_ok(),
+            "a link to a different skill under install_dir must survive"
+        );
         assert!(agent_skills.join("external").symlink_metadata().is_ok());
         assert!(agent_skills.join("realdir").is_dir());
     }
 
+    #[cfg(unix)]
     #[test]
+    fn test_remove_agent_symlinks_in_cross_tap_basename_collision() {
+        use tempfile::TempDir;
+        let install_dir = TempDir::new().unwrap();
+        let agent_dir = TempDir::new().unwrap();
+        let agent_skills = agent_dir.path().join("skills");
+
+        // tapA/pdf and tapB/pdf share the single link name "pdf".
+        let tap_a_pdf = install_dir.path().join("tapA/pdf");
+        fs::create_dir_all(&tap_a_pdf).unwrap();
+        make_symlink(&tap_a_pdf, &agent_skills.join("pdf"));
+
+        // Uninstalling tapB/pdf must not remove the link pointing at tapA/pdf.
+        remove_agent_symlinks_in(
+            std::slice::from_ref(&agent_skills),
+            "pdf",
+            &install_dir.path().join("tapB/pdf"),
+        );
+        assert!(
+            agent_skills.join("pdf").symlink_metadata().is_ok(),
+            "link to tapA/pdf must survive uninstall of tapB/pdf"
+        );
+
+        // Uninstalling tapA/pdf removes it.
+        remove_agent_symlinks_in(std::slice::from_ref(&agent_skills), "pdf", &tap_a_pdf);
+        assert!(agent_skills.join("pdf").symlink_metadata().is_err());
+    }
+
+    #[test]
+    #[serial_test::serial]
     fn test_batch_removes_files_and_keeps_unlisted_entries() {
         use tempfile::TempDir;
+        let temp = TempDir::new().unwrap();
+        let _guard = TestHomeGuard::set(&temp.path().join("home"));
         let install_dir = TempDir::new().unwrap();
 
         let mut db = Database::default();
@@ -1400,8 +1468,11 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_batch_continues_after_failure() {
         use tempfile::TempDir;
+        let temp = TempDir::new().unwrap();
+        let _guard = TestHomeGuard::set(&temp.path().join("home"));
         let install_dir = TempDir::new().unwrap();
 
         let mut db = Database::default();
@@ -1430,8 +1501,11 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_batch_records_error_for_unparseable_name() {
         use tempfile::TempDir;
+        let temp = TempDir::new().unwrap();
+        let _guard = TestHomeGuard::set(&temp.path().join("home"));
         let install_dir = TempDir::new().unwrap();
 
         let mut db = Database::default();
@@ -1451,8 +1525,11 @@ mod tests {
 
     /// With `prune = true`, a skill missing upstream is removed from disk and db.
     #[test]
+    #[serial_test::serial]
     fn test_prune_or_report_missing_prunes_when_flag_set() {
         use tempfile::TempDir;
+        let temp = TempDir::new().unwrap();
+        let _guard = TestHomeGuard::set(&temp.path().join("home"));
         let install_dir = TempDir::new().unwrap();
 
         let mut db = Database::default();
@@ -1473,8 +1550,11 @@ mod tests {
 
     /// With `prune = false`, the skill is reported but left installed (files and db entry).
     #[test]
+    #[serial_test::serial]
     fn test_prune_or_report_missing_keeps_when_flag_unset() {
         use tempfile::TempDir;
+        let temp = TempDir::new().unwrap();
+        let _guard = TestHomeGuard::set(&temp.path().join("home"));
         let install_dir = TempDir::new().unwrap();
 
         let mut db = Database::default();
@@ -1707,5 +1787,39 @@ mod tests {
         let db = db::load_db().unwrap();
         assert!(!db.installed.contains_key("tap/a"), "db entry should be removed");
         assert!(db.installed.contains_key("tap/b"), "other db entries must stay");
+    }
+
+    /// End-to-end: uninstalling a skill removes its agent symlink and leaves
+    /// other skills' links intact — the wiring this module's symlink cleanup
+    /// exists for.
+    #[cfg(unix)]
+    #[test]
+    #[serial_test::serial]
+    fn test_uninstall_skill_removes_agent_symlink() {
+        use tempfile::TempDir;
+        let temp = TempDir::new().unwrap();
+        let home = temp.path().join("home");
+        let _guard = TestHomeGuard::set(&home);
+
+        let install_dir = get_skills_install_dir().unwrap();
+        let mut db = Database::default();
+        seed_installed(&mut db, &install_dir, "tap", "a");
+        seed_installed(&mut db, &install_dir, "tap", "b");
+        db::save_db(&db).unwrap();
+
+        let agent_skills = home.join(".claude/skills");
+        make_symlink(&install_dir.join("tap/a"), &agent_skills.join("a"));
+        make_symlink(&install_dir.join("tap/b"), &agent_skills.join("b"));
+
+        uninstall_skill("tap/a").unwrap();
+
+        assert!(
+            agent_skills.join("a").symlink_metadata().is_err(),
+            "uninstalled skill's agent link should be removed"
+        );
+        assert!(
+            agent_skills.join("b").symlink_metadata().is_ok(),
+            "other skills' agent links must survive"
+        );
     }
 }

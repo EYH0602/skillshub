@@ -202,7 +202,7 @@ pub struct TapSummary {
 }
 
 impl TapSummary {
-    /// Display label for a tap picker row: `name (N installed / M available)`.
+    /// Display label for a tap picker row: `name (default) — installed/available`.
     pub fn picker_label(&self) -> String {
         let default_marker = if self.is_default { " (default)" } else { "" };
         format!(
