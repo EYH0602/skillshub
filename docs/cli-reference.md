@@ -18,6 +18,21 @@ skillshub info <owner/repo/skill>           # Show skill details
 skillshub install-all                       # Install all from all added taps
 ```
 
+## Interactive TUI
+```bash
+skillshub tui                               # Interactive, tap-centric skill manager
+```
+
+`skillshub tui` is organized around taps:
+
+1. **Tap list** (top level): `↑/↓` or `j/k` to move, `Enter` to enter the focused tap, `d`, `Delete`, or `Backspace` to delete the focused tap (uninstalls all its skills after a `y/N` confirm; the default tap cannot be deleted), plus trailing `Update everything` and `Quit` rows.
+2. **Tap view**: `View/manage skills` or `Delete this tap…` (same deletion flow, reachable from inside the tap too).
+3. **Skill list**: multi-select the tap's skills (space to toggle, type to filter; installed ones are pre-checked), then choose `Uninstall selected` or `Update selected`.
+
+Requires a terminal (TTY); use the subcommands above in scripts. `Esc` cancels the current prompt and backs up one level (at the tap list it exits); `q` quits from the tap list only — inside the inquire prompts it is a filter keystroke. `Ctrl-C` exits.
+
+Confirmation friction scales with blast radius: scoped deletes (uninstalling skills, deleting a tap) use a `y/N` confirm defaulting to No, while full-state deletion (`clean all`) requires typing `yes`. The difference is intentional.
+
 ## Star List Import
 ```bash
 skillshub star-list <url>                   # Add all repos from a star list as taps

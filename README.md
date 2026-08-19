@@ -18,6 +18,8 @@ Install skills once and link them to every detected agent so all of your agents 
 
 ### From Cargo (recommended)
 
+Requires Rust 1.85 or later.
+
 ```bash
 cargo install skillshub
 ```
@@ -88,6 +90,9 @@ skillshub update --prune                            # Also uninstall skills remo
 
 # Uninstall a skill
 skillshub uninstall EYH0602/skillshub/using-skillshub
+
+# Interactively browse taps, manage skills, or delete taps (d/Del/⌫ on a tap)
+skillshub tui
 
 # Install all skills from the default taps
 skillshub install-all

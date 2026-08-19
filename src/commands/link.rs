@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::Utc;
 use colored::Colorize;
 use std::collections::HashSet;
@@ -97,29 +97,24 @@ pub fn link_to_agents() -> Result<()> {
 
         let mut linked_count = 0;
         let mut skipped_count = 0;
+        let mut failed_count = 0;
         let mut external_synced = 0;
 
-        // Link skillshub-managed skills
+        // Link skillshub-managed skills. A per-skill failure (EACCES, ENOSPC,
+        // Windows privilege) is reported and skipped — not propagated — so one
+        // bad link can't leave the remaining agents unlinked and the db unsaved.
         for skill in &skills {
             let link_name = skill_link_name(skill);
             let skill_link_path = link_path.join(&link_name);
 
-            if skill_link_path.exists() {
-                if skill_link_path.is_symlink() {
-                    linked_count += 1;
-                } else {
-                    skipped_count += 1;
+            match create_or_refresh_symlink(&skill.path, &skill_link_path, &skills_dir) {
+                Ok(LinkOutcome::Linked) => linked_count += 1,
+                Ok(LinkOutcome::Skipped) => skipped_count += 1,
+                Err(e) => {
+                    eprintln!("  {} {:#}", "!".red(), e);
+                    failed_count += 1;
                 }
-                continue;
             }
-
-            #[cfg(unix)]
-            std::os::unix::fs::symlink(&skill.path, &skill_link_path)?;
-
-            #[cfg(windows)]
-            std::os::windows::fs::symlink_dir(&skill.path, &skill_link_path)?;
-
-            linked_count += 1;
         }
 
         // Sync external skills to this agent (from their source agents)
@@ -162,6 +157,9 @@ pub fn link_to_agents() -> Result<()> {
         }
         if skipped_count > 0 {
             parts.push(format!("skipped {}", skipped_count));
+        }
+        if failed_count > 0 {
+            parts.push(format!("failed {}", failed_count));
         }
         println!("  {} {} ({})", "✓".green(), agent_name, parts.join(", "));
     }
@@ -256,6 +254,52 @@ fn discover_external_skills(
     let all_external: Vec<ExternalSkill> = db.external.values().cloned().collect();
 
     Ok((new_external, all_external))
+}
+
+enum LinkOutcome {
+    Linked,
+    Skipped,
+}
+
+/// Create or refresh a symlink at `link_path` pointing to `target`.
+///
+/// An existing symlink is replaced only when it is dangling or already points
+/// inside `install_dir` (i.e. skillshub-managed). A symlink pointing anywhere
+/// else is user-created and left alone; a non-symlink path is left alone too.
+fn create_or_refresh_symlink(target: &Path, link_path: &Path, install_dir: &Path) -> Result<LinkOutcome> {
+    if let Ok(metadata) = fs::symlink_metadata(link_path) {
+        if !metadata.file_type().is_symlink() {
+            return Ok(LinkOutcome::Skipped);
+        }
+
+        let managed = match fs::read_link(link_path) {
+            Ok(t) => {
+                let abs = if t.is_absolute() {
+                    t
+                } else {
+                    link_path.parent().map(|p| p.join(&t)).unwrap_or(t)
+                };
+                // `exists()` follows links, so it is false for dangling ones.
+                !link_path.exists() || abs.starts_with(install_dir)
+            }
+            Err(_) => false,
+        };
+        if !managed {
+            return Ok(LinkOutcome::Skipped);
+        }
+        fs::remove_file(link_path)
+            .with_context(|| format!("Failed to replace existing link {}", link_path.display()))?;
+    }
+
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(target, link_path)
+        .with_context(|| format!("Failed to link {} -> {}", link_path.display(), target.display()))?;
+
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_dir(target, link_path)
+        .with_context(|| format!("Failed to link {} -> {}", link_path.display(), target.display()))?;
+
+    Ok(LinkOutcome::Linked)
 }
 
 fn skill_link_name(skill: &Skill) -> String {
@@ -374,5 +418,91 @@ mod tests {
         assert_eq!(names.len(), 2);
         assert!(names.contains(&"legacy-skill".to_string()));
         assert!(names.contains(&"nested-skill".to_string()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_create_or_refresh_symlink_replaces_dangling_symlink() {
+        let temp = TempDir::new().unwrap();
+        let install_dir = temp.path().join("install");
+        let target = install_dir.join("target-skill");
+        write_skill(&target, "target-skill");
+        let stale_target = install_dir.join("stale-target");
+        let link_path = temp.path().join("link");
+
+        std::os::unix::fs::symlink(&stale_target, &link_path).unwrap();
+        assert!(!link_path.exists());
+
+        let outcome = create_or_refresh_symlink(&target, &link_path, &install_dir).unwrap();
+        assert!(matches!(outcome, LinkOutcome::Linked));
+        assert_eq!(fs::read_link(&link_path).unwrap(), target);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_create_or_refresh_symlink_refreshes_valid_symlink() {
+        let temp = TempDir::new().unwrap();
+        let install_dir = temp.path().join("install");
+        let target = install_dir.join("target-skill");
+        write_skill(&target, "target-skill");
+        let link_path = temp.path().join("link");
+
+        std::os::unix::fs::symlink(&target, &link_path).unwrap();
+
+        let outcome = create_or_refresh_symlink(&target, &link_path, &install_dir).unwrap();
+        assert!(matches!(outcome, LinkOutcome::Linked));
+        assert_eq!(fs::read_link(&link_path).unwrap(), target);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_create_or_refresh_symlink_leaves_foreign_symlink_alone() {
+        let temp = TempDir::new().unwrap();
+        let install_dir = temp.path().join("install");
+        let target = install_dir.join("target-skill");
+        write_skill(&target, "target-skill");
+        // A symlink the user created, pointing at their own checkout outside install_dir.
+        let foreign_target = temp.path().join("my-own-checkout");
+        write_skill(&foreign_target, "target-skill");
+        let link_path = temp.path().join("link");
+
+        std::os::unix::fs::symlink(&foreign_target, &link_path).unwrap();
+
+        let outcome = create_or_refresh_symlink(&target, &link_path, &install_dir).unwrap();
+        assert!(matches!(outcome, LinkOutcome::Skipped));
+        assert_eq!(
+            fs::read_link(&link_path).unwrap(),
+            foreign_target,
+            "user-owned symlink must not be redirected"
+        );
+    }
+
+    #[test]
+    fn test_create_or_refresh_symlink_skips_real_directory() {
+        let temp = TempDir::new().unwrap();
+        let install_dir = temp.path().join("install");
+        let target = install_dir.join("target-skill");
+        write_skill(&target, "target-skill");
+        let link_path = temp.path().join("link");
+        fs::create_dir_all(&link_path).unwrap();
+
+        let outcome = create_or_refresh_symlink(&target, &link_path, &install_dir).unwrap();
+        assert!(matches!(outcome, LinkOutcome::Skipped));
+        assert!(link_path.is_dir());
+        assert!(!link_path.is_symlink());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_create_or_refresh_symlink_creates_new_symlink() {
+        let temp = TempDir::new().unwrap();
+        let install_dir = temp.path().join("install");
+        let target = install_dir.join("target-skill");
+        write_skill(&target, "target-skill");
+        let link_path = temp.path().join("link");
+
+        let outcome = create_or_refresh_symlink(&target, &link_path, &install_dir).unwrap();
+        assert!(matches!(outcome, LinkOutcome::Linked));
+        assert_eq!(fs::read_link(&link_path).unwrap(), target);
     }
 }

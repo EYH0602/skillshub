@@ -193,6 +193,52 @@ pub fn remove_tap(name: &str, keep_skills: bool) -> Result<()> {
     Ok(())
 }
 
+/// Summary of a configured tap for interactive pickers.
+pub struct TapSummary {
+    pub name: String,
+    pub is_default: bool,
+    pub installed_count: usize,
+    pub available_count: Option<usize>,
+}
+
+impl TapSummary {
+    /// Display label for a tap picker row: `name (default) — installed/available`.
+    pub fn picker_label(&self) -> String {
+        let default_marker = if self.is_default { " (default)" } else { "" };
+        format!(
+            "{}{} — {}",
+            self.name,
+            default_marker,
+            format_skills_count(self.installed_count, self.available_count)
+        )
+    }
+}
+
+/// Summaries of all configured taps, default tap first then alphabetical.
+pub fn list_tap_summaries(db: &Database) -> Vec<TapSummary> {
+    let mut summaries: Vec<TapSummary> = db
+        .taps
+        .keys()
+        .map(|name| TapSummary {
+            name: name.clone(),
+            is_default: db.taps[name].is_default,
+            installed_count: count_installed_skills(db, name),
+            available_count: get_tap_registry(db, name)
+                .ok()
+                .and_then(|opt| opt)
+                .map(|registry| registry.skills.len()),
+        })
+        .collect();
+
+    summaries.sort_by(|a, b| match (a.is_default, b.is_default) {
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        _ => a.name.cmp(&b.name),
+    });
+
+    summaries
+}
+
 /// List all configured taps
 pub fn list_taps() -> Result<()> {
     let db = db::init_db()?;
@@ -202,15 +248,13 @@ pub fn list_taps() -> Result<()> {
         return Ok(());
     }
 
+    let summaries = list_tap_summaries(&db);
+
     let mut rows: Vec<TapRow> = Vec::new();
 
-    for (name, tap) in &db.taps {
-        let installed_count = count_installed_skills(&db, name);
-        let available_count = get_tap_registry(&db, name)
-            .ok()
-            .and_then(|opt| opt)
-            .map(|registry| registry.skills.len());
-        let skills_count = format_skills_count(installed_count, available_count);
+    for summary in &summaries {
+        let tap = &db.taps[&summary.name];
+        let skills_count = format_skills_count(summary.installed_count, summary.available_count);
 
         let display_url = match &tap.branch {
             Some(branch) => {
@@ -221,20 +265,12 @@ pub fn list_taps() -> Result<()> {
         };
 
         rows.push(TapRow {
-            name: name.clone(),
+            name: summary.name.clone(),
             url: display_url,
             skills_count,
-            is_default: if tap.is_default { "✓" } else { "" },
+            is_default: if summary.is_default { "✓" } else { "" },
         });
     }
-
-    // Sort with default tap first
-    rows.sort_by(|a, b| match (a.is_default == "✓", b.is_default == "✓") {
-        (true, true) => a.name.cmp(&b.name),
-        (true, false) => std::cmp::Ordering::Less,
-        (false, true) => std::cmp::Ordering::Greater,
-        (false, false) => a.name.cmp(&b.name),
-    });
 
     let table = Table::new(rows)
         .with(Style::rounded())
@@ -785,6 +821,70 @@ mod tests {
             description: None,
             skills,
         }
+    }
+
+    /// Helper to build a TapInfo with a cached registry of the given skill names
+    fn make_tap_info(is_default: bool, skill_names: &[&str]) -> TapInfo {
+        TapInfo {
+            url: "https://github.com/test/tap".to_string(),
+            skills_path: "skills".to_string(),
+            updated_at: None,
+            is_default,
+            cached_registry: Some(make_registry("test/tap", skill_names)),
+            branch: None,
+        }
+    }
+
+    #[test]
+    fn test_list_tap_summaries_default_first_then_alphabetical() {
+        let mut db = Database::default();
+        db.taps.insert("zebra/tap".to_string(), make_tap_info(false, &["a"]));
+        db.taps.insert("apple/tap".to_string(), make_tap_info(false, &["a"]));
+        db.taps
+            .insert(DEFAULT_TAP_NAME.to_string(), make_tap_info(true, &["a", "b"]));
+
+        insert_installed(&mut db, "zebra/tap", "a");
+        insert_installed(&mut db, DEFAULT_TAP_NAME, "a");
+        insert_installed(&mut db, DEFAULT_TAP_NAME, "b");
+
+        let summaries = list_tap_summaries(&db);
+        let names: Vec<&str> = summaries.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec![DEFAULT_TAP_NAME, "apple/tap", "zebra/tap"]);
+
+        let default = &summaries[0];
+        assert!(default.is_default);
+        assert_eq!(default.installed_count, 2);
+        assert_eq!(default.available_count, Some(2));
+
+        let zebra = &summaries[2];
+        assert!(!zebra.is_default);
+        assert_eq!(zebra.installed_count, 1);
+        assert_eq!(zebra.available_count, Some(1));
+    }
+
+    #[test]
+    fn test_list_tap_summaries_empty() {
+        let db = Database::default();
+        assert!(list_tap_summaries(&db).is_empty());
+    }
+
+    #[test]
+    fn test_tap_summary_picker_label() {
+        let summary = TapSummary {
+            name: "owner/repo".to_string(),
+            is_default: true,
+            installed_count: 2,
+            available_count: Some(5),
+        };
+        assert_eq!(summary.picker_label(), "owner/repo (default) — 2/5");
+
+        let plain = TapSummary {
+            name: "owner/repo".to_string(),
+            is_default: false,
+            installed_count: 0,
+            available_count: None,
+        };
+        assert_eq!(plain.picker_label(), "owner/repo — 0/?");
     }
 
     #[test]

@@ -9,9 +9,10 @@ For architecture, CLI reference, supported agents, and skill/tap formats, see `d
 
 ## Development
 
-- Rust 2021 edition
+- Rust 2021 edition, MSRV 1.85 (bound by transitive deps, e.g. `clap_complete` and `unicode-segmentation` via `inquire`/`crossterm`)
 - `git` is a required runtime dependency (used for tap cloning and updates)
 - `clap_complete` is used to generate shell completion scripts (bash, zsh, fish)
+- `inquire` powers the interactive `skillshub tui` (tap-centric: tap list → tap view → skill uninstall/update; tap deletion supported); the top-level tap list uses `crossterm` directly so `d`/`Delete`/`Backspace` deletes the focused tap
 - Always update `README.md` and `CLAUDE.md` when you introduce new features or libraries.
 - Always write unit tests for new features.
 - Always test your code after implementation.
@@ -40,6 +41,7 @@ cargo run -- agents
 cargo run -- external list
 cargo run -- external scan
 cargo run -- doctor
+cargo run -- tui
 cargo run -- completions bash
 ```
 
