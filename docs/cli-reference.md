@@ -18,6 +18,20 @@ skillshub info <owner/repo/skill>           # Show skill details
 skillshub install-all                       # Install all from all added taps
 ```
 
+## Interactive TUI
+```bash
+skillshub tui                               # Interactive hub: uninstall or update skills
+```
+
+`skillshub tui` opens a menu with two workflows:
+
+- **Uninstall skills**: multi-select installed skills (space to toggle, type to filter), then confirm. Removes the skill files and their agent symlinks.
+- **Update skills**: multi-select skills, or pick "All skills" to update everything.
+
+Requires a terminal (TTY); use the subcommands above in scripts. `Esc` backs out to the menu (exits at the menu itself), `Ctrl-C` exits.
+
+Confirmation friction scales with blast radius: scoped deletes (uninstalling the skills you just selected) use a `y/N` confirm defaulting to No, while full-state deletion (`clean all`) requires typing `yes`. The difference is intentional.
+
 ## Star List Import
 ```bash
 skillshub star-list <url>                   # Add all repos from a star list as taps
