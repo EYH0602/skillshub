@@ -165,8 +165,10 @@ fn render_picker(
 ) -> Result<u16> {
     let (cols, term_rows) = term_size;
     let width = (cols as usize).max(1);
-    // Reserve one line for the header.
-    let max_rows = (term_rows as usize).saturating_sub(1).max(1);
+    // Reserve one line for the header and one for the trailing newline: every
+    // row ends with \r\n, so a frame of exactly term_rows lines scrolls the
+    // terminal, pushing the header off and desyncing the MoveUp rewind.
+    let max_rows = (term_rows as usize).saturating_sub(2).max(1);
 
     // Scroll the window only when the cursor moves past its bottom edge.
     let start = if cursor >= max_rows { cursor + 1 - max_rows } else { 0 };
@@ -763,14 +765,34 @@ mod tests {
         let rows: Vec<PickerRow> = summaries.iter().map(|s| PickerRow::Tap(s.name.clone())).collect();
         let mut out = Vec::new();
 
-        // Terminal height 5 => header + a 4-row window around the cursor.
+        // Terminal height 5 => header + a 3-row window; one line stays free so
+        // the trailing \r\n never scrolls the terminal.
         let lines = render_picker(&mut out, &summaries, &rows, 7, 0, (80, 5)).unwrap();
         let text = String::from_utf8(out).unwrap();
 
-        assert_eq!(lines, 5);
+        assert_eq!(lines, 4);
         assert!(text.contains("> t7/tap"), "focused row must be in the viewport");
-        assert!(text.contains("t6/tap"));
-        assert!(!text.contains("t0/tap"), "rows above the window must not render");
+        assert!(text.contains("t5/tap"));
+        assert!(!text.contains("t4/tap"), "rows above the window must not render");
+    }
+
+    #[test]
+    fn render_never_emits_a_full_screen_of_lines() {
+        // A frame of exactly term_rows lines scrolls on the trailing \r\n and
+        // desyncs the MoveUp rewind, so the invariant is lines <= term_rows - 1.
+        let summaries: Vec<TapSummary> = (0..30).map(|i| summary(&format!("t{}/tap", i))).collect();
+        let rows: Vec<PickerRow> = summaries.iter().map(|s| PickerRow::Tap(s.name.clone())).collect();
+
+        for term_rows in [3u16, 5, 24, 50] {
+            let mut out = Vec::new();
+            let lines = render_picker(&mut out, &summaries, &rows, 25, 0, (80, term_rows)).unwrap();
+            assert!(
+                lines < term_rows,
+                "frame of {} lines fills a {}-row terminal and scrolls",
+                lines,
+                term_rows
+            );
+        }
     }
 
     #[test]
