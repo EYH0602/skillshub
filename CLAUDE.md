@@ -12,7 +12,7 @@ For architecture, CLI reference, supported agents, and skill/tap formats, see `d
 - Rust 2021 edition, MSRV 1.80 (required by `inquire`)
 - `git` is a required runtime dependency (used for tap cloning and updates)
 - `clap_complete` is used to generate shell completion scripts (bash, zsh, fish)
-- `inquire` powers the interactive `skillshub tui` (tap-centric: tap list → tap view → skill uninstall/update; tap deletion supported); the top-level tap list uses `crossterm` directly so `d`/`Delete` deletes the focused tap
+- `inquire` powers the interactive `skillshub tui` (tap-centric: tap list → tap view → skill uninstall/update; tap deletion supported); the top-level tap list uses `crossterm` directly so `d`/`Delete`/`Backspace` deletes the focused tap
 - Always update `README.md` and `CLAUDE.md` when you introduce new features or libraries.
 - Always write unit tests for new features.
 - Always test your code after implementation.

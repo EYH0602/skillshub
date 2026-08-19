@@ -25,7 +25,7 @@ skillshub tui                               # Interactive, tap-centric skill man
 
 `skillshub tui` is organized around taps:
 
-1. **Tap list** (top level): `↑/↓` or `j/k` to move, `Enter` to enter the focused tap, `d` or `Delete` to delete the focused tap (uninstalls all its skills after a `y/N` confirm; the default tap cannot be deleted), plus trailing `Update everything` and `Quit` rows.
+1. **Tap list** (top level): `↑/↓` or `j/k` to move, `Enter` to enter the focused tap, `d`, `Delete`, or `Backspace` to delete the focused tap (uninstalls all its skills after a `y/N` confirm; the default tap cannot be deleted), plus trailing `Update everything` and `Quit` rows.
 2. **Tap view**: `View/manage skills` or `Delete this tap…` (same deletion flow, reachable from inside the tap too).
 3. **Skill list**: multi-select the tap's skills (space to toggle, type to filter; installed ones are pre-checked), then choose `Uninstall selected` or `Update selected`.
 

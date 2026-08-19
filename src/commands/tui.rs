@@ -94,7 +94,7 @@ fn handle_picker_key(rows: &[PickerRow], cursor: &mut usize, key: KeyEvent) -> O
             PickerRow::UpdateEverything => PickerOutcome::UpdateAll,
             PickerRow::Quit => PickerOutcome::Quit,
         }),
-        KeyCode::Delete | KeyCode::Char('d') => match &rows[*cursor] {
+        KeyCode::Delete | KeyCode::Backspace | KeyCode::Char('d') => match &rows[*cursor] {
             PickerRow::Tap(name) => Some(PickerOutcome::Delete(name.clone())),
             _ => None,
         },
@@ -117,7 +117,7 @@ fn render_picker(
     queue!(out, terminal::Clear(terminal::ClearType::FromCursorDown))?;
     queue!(
         out,
-        Print("Select a tap (↑/↓ or j/k move, Enter view, d/Delete delete, q quit)\r\n")
+        Print("Select a tap (↑/↓ or j/k move, Enter view, d/Del/⌫ delete, q quit)\r\n")
     )?;
     let mut lines: u16 = 1;
     for (i, row) in rows.iter().enumerate() {
@@ -496,6 +496,12 @@ mod tests {
             handle_picker_key(&rows, &mut cursor, key(KeyCode::Char('d'))),
             Some(PickerOutcome::Delete("a/one".to_string()))
         );
+
+        let mut cursor = 1;
+        assert_eq!(
+            handle_picker_key(&rows, &mut cursor, key(KeyCode::Backspace)),
+            Some(PickerOutcome::Delete("b/two".to_string()))
+        );
     }
 
     #[test]
@@ -504,6 +510,7 @@ mod tests {
 
         let mut cursor = 2;
         assert_eq!(handle_picker_key(&rows, &mut cursor, key(KeyCode::Delete)), None);
+        assert_eq!(handle_picker_key(&rows, &mut cursor, key(KeyCode::Backspace)), None);
         assert_eq!(handle_picker_key(&rows, &mut cursor, key(KeyCode::Char('d'))), None);
 
         let mut cursor = 3;
