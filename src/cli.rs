@@ -97,6 +97,9 @@ pub enum Commands {
         /// Shell to generate completions for
         shell: Shell,
     },
+
+    /// Interactive TUI for managing skills
+    Tui,
 }
 
 /// Supported shells for completion generation

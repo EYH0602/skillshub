@@ -12,7 +12,8 @@ use clap_complete::{generate, Shell as ClapShell};
 
 use cli::{CleanCommands, Cli, Commands, ExternalCommands, Shell, TapCommands};
 use commands::{
-    clean_all, clean_cache, clean_links, external_forget, external_list, external_scan, link_to_agents, show_agents,
+    clean_all, clean_cache, clean_links, external_forget, external_list, external_scan, link_to_agents, run_tui,
+    show_agents,
 };
 use registry::{
     add_skill_from_url, add_tap, import_star_list, install_all, install_all_from_tap, install_skill, list_skills,
@@ -76,6 +77,7 @@ fn main() -> Result<()> {
             let mut cmd = Cli::command();
             generate(clap_shell, &mut cmd, "skillshub", &mut std::io::stdout());
         }
+        Commands::Tui => run_tui()?,
     }
 
     Ok(())
