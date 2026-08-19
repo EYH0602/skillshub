@@ -104,22 +104,10 @@ pub fn link_to_agents() -> Result<()> {
             let link_name = skill_link_name(skill);
             let skill_link_path = link_path.join(&link_name);
 
-            if skill_link_path.exists() {
-                if skill_link_path.is_symlink() {
-                    linked_count += 1;
-                } else {
-                    skipped_count += 1;
-                }
-                continue;
+            match create_or_refresh_symlink(&skill.path, &skill_link_path)? {
+                LinkOutcome::Linked => linked_count += 1,
+                LinkOutcome::Skipped => skipped_count += 1,
             }
-
-            #[cfg(unix)]
-            std::os::unix::fs::symlink(&skill.path, &skill_link_path)?;
-
-            #[cfg(windows)]
-            std::os::windows::fs::symlink_dir(&skill.path, &skill_link_path)?;
-
-            linked_count += 1;
         }
 
         // Sync external skills to this agent (from their source agents)
@@ -258,6 +246,31 @@ fn discover_external_skills(
     Ok((new_external, all_external))
 }
 
+enum LinkOutcome {
+    Linked,
+    Skipped,
+}
+
+/// Create or refresh a symlink at `link_path` pointing to `target`.
+/// An existing symlink (dangling or not) is replaced; a non-symlink path is left alone.
+fn create_or_refresh_symlink(target: &Path, link_path: &Path) -> Result<LinkOutcome> {
+    if let Ok(metadata) = fs::symlink_metadata(link_path) {
+        if metadata.file_type().is_symlink() {
+            fs::remove_file(link_path)?;
+        } else {
+            return Ok(LinkOutcome::Skipped);
+        }
+    }
+
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(target, link_path)?;
+
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_dir(target, link_path)?;
+
+    Ok(LinkOutcome::Linked)
+}
+
 fn skill_link_name(skill: &Skill) -> String {
     skill
         .path
@@ -374,5 +387,64 @@ mod tests {
         assert_eq!(names.len(), 2);
         assert!(names.contains(&"legacy-skill".to_string()));
         assert!(names.contains(&"nested-skill".to_string()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_create_or_refresh_symlink_replaces_dangling_symlink() {
+        let temp = TempDir::new().unwrap();
+        let target = temp.path().join("target-skill");
+        write_skill(&target, "target-skill");
+        let stale_target = temp.path().join("stale-target");
+        let link_path = temp.path().join("link");
+
+        std::os::unix::fs::symlink(&stale_target, &link_path).unwrap();
+        assert!(!link_path.exists());
+
+        let outcome = create_or_refresh_symlink(&target, &link_path).unwrap();
+        assert!(matches!(outcome, LinkOutcome::Linked));
+        assert_eq!(fs::read_link(&link_path).unwrap(), target);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_create_or_refresh_symlink_refreshes_valid_symlink() {
+        let temp = TempDir::new().unwrap();
+        let target = temp.path().join("target-skill");
+        write_skill(&target, "target-skill");
+        let link_path = temp.path().join("link");
+
+        std::os::unix::fs::symlink(&target, &link_path).unwrap();
+
+        let outcome = create_or_refresh_symlink(&target, &link_path).unwrap();
+        assert!(matches!(outcome, LinkOutcome::Linked));
+        assert_eq!(fs::read_link(&link_path).unwrap(), target);
+    }
+
+    #[test]
+    fn test_create_or_refresh_symlink_skips_real_directory() {
+        let temp = TempDir::new().unwrap();
+        let target = temp.path().join("target-skill");
+        write_skill(&target, "target-skill");
+        let link_path = temp.path().join("link");
+        fs::create_dir_all(&link_path).unwrap();
+
+        let outcome = create_or_refresh_symlink(&target, &link_path).unwrap();
+        assert!(matches!(outcome, LinkOutcome::Skipped));
+        assert!(link_path.is_dir());
+        assert!(!link_path.is_symlink());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_create_or_refresh_symlink_creates_new_symlink() {
+        let temp = TempDir::new().unwrap();
+        let target = temp.path().join("target-skill");
+        write_skill(&target, "target-skill");
+        let link_path = temp.path().join("link");
+
+        let outcome = create_or_refresh_symlink(&target, &link_path).unwrap();
+        assert!(matches!(outcome, LinkOutcome::Linked));
+        assert_eq!(fs::read_link(&link_path).unwrap(), target);
     }
 }
