@@ -1,6 +1,6 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
 use colored::Colorize;
 use tabled::{
@@ -446,12 +446,40 @@ pub fn uninstall_skill(full_name: &str) -> Result<()> {
         anyhow::bail!("Skill '{}' is not installed", skill_id.full_name());
     }
 
-    remove_installed_skill_files(&mut db, &install_dir, &skill_id)?;
+    let results = remove_installed_skills_batch(&mut db, &install_dir, std::slice::from_ref(&skill_id.full_name()));
+    let (_, result) = results
+        .into_iter()
+        .next()
+        .expect("batch of one always yields one result");
+    result?;
+
     db::save_db(&db)?;
 
     println!("{} Uninstalled '{}'", "✓".green(), skill_id.full_name());
 
     Ok(())
+}
+
+/// Remove multiple installed skills, collecting per-skill results.
+///
+/// Never aborts mid-batch: a failure for one skill is recorded in the returned
+/// vector and the remaining skills are still processed. Only successfully
+/// removed skills lose their `db.installed` entry. Does NOT init or save the
+/// DB — the caller owns persistence.
+pub(crate) fn remove_installed_skills_batch(
+    db: &mut Database,
+    install_dir: &Path,
+    names: &[String],
+) -> Vec<(String, Result<()>)> {
+    let mut results = Vec::with_capacity(names.len());
+    for name in names {
+        let result = match SkillId::parse(name) {
+            Some(skill_id) => remove_installed_skill_files(db, install_dir, &skill_id),
+            None => Err(anyhow!("Invalid skill name '{}'. Use format: tap/skill", name)),
+        };
+        results.push((name.clone(), result));
+    }
+    results
 }
 
 /// Remove a skill's installed files and its `db.installed` entry, mutating `db` in place.
@@ -462,6 +490,9 @@ pub fn uninstall_skill(full_name: &str) -> Result<()> {
 /// just-removed entry from its stale in-memory copy.
 pub(crate) fn remove_installed_skill_files(db: &mut Database, install_dir: &Path, skill_id: &SkillId) -> Result<()> {
     let skill_path = install_dir.join(&skill_id.tap).join(&skill_id.skill);
+
+    // Remove agent symlinks too, so uninstall doesn't leave dangling links behind.
+    remove_agent_symlinks(skill_id, install_dir);
 
     if skill_path.exists() {
         std::fs::remove_dir_all(&skill_path)?;
@@ -476,6 +507,46 @@ pub(crate) fn remove_installed_skill_files(db: &mut Database, install_dir: &Path
     db::remove_installed_skill(db, &skill_id.full_name());
 
     Ok(())
+}
+
+/// Remove a skill's symlinks from all discovered agents' skills directories.
+fn remove_agent_symlinks(skill_id: &SkillId, install_dir: &Path) {
+    let agent_skill_dirs: Vec<PathBuf> = crate::agent::discover_agents()
+        .iter()
+        .map(|a| a.path.join(a.skills_subdir))
+        .collect();
+    remove_agent_symlinks_in(&agent_skill_dirs, &skill_id.skill, install_dir);
+}
+
+/// Remove skillshub-managed symlinks named `link_name` from the given directories.
+///
+/// Only entries that ARE symlinks AND whose (absolutized) target starts with
+/// `install_dir` are removed — real directories and symlinks pointing elsewhere
+/// (user-owned / external) are left untouched. Best-effort: individual removal
+/// errors are ignored so a batch uninstall is never aborted.
+fn remove_agent_symlinks_in(agent_skill_dirs: &[PathBuf], link_name: &str, install_dir: &Path) {
+    for dir in agent_skill_dirs {
+        let link_path = dir.join(link_name);
+
+        // symlink_metadata does not follow links, so it also sees dangling ones.
+        let Ok(meta) = std::fs::symlink_metadata(&link_path) else {
+            continue;
+        };
+        if !meta.file_type().is_symlink() {
+            continue;
+        }
+
+        let Ok(target) = std::fs::read_link(&link_path) else {
+            continue;
+        };
+        // Do NOT canonicalize the target: after the skill files are deleted the
+        // target dangles and canonicalize fails. Absolutize relative targets
+        // against the link's directory and compare raw paths instead.
+        let abs_target = if target.is_absolute() { target } else { dir.join(target) };
+        if abs_target.starts_with(install_dir) {
+            let _ = std::fs::remove_file(&link_path);
+        }
+    }
 }
 
 /// Handle a skill that no longer exists upstream: prune it (when `prune`) or
@@ -1223,6 +1294,125 @@ mod tests {
                 gist_updated_at: None,
             },
         );
+    }
+
+    /// Create a symlink `link` -> `target` (unix-only; tests using it are cfg'd).
+    #[cfg(unix)]
+    fn make_symlink(target: &Path, link: &Path) {
+        fs::create_dir_all(link.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(target, link).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_remove_agent_symlinks_in_removes_only_managed_links() {
+        use tempfile::TempDir;
+        let install_dir = TempDir::new().unwrap();
+        let agent_dir = TempDir::new().unwrap();
+        let skill_dir = install_dir.path().join("tap/myskill");
+        fs::create_dir_all(&skill_dir).unwrap();
+
+        let agent_skills = agent_dir.path().join("skills");
+
+        // Managed symlink (points into install_dir) -> removed
+        make_symlink(&skill_dir, &agent_skills.join("managed"));
+        // Dangling managed symlink (target gone) -> still removed
+        make_symlink(&install_dir.path().join("tap/gone"), &agent_skills.join("dangling"));
+        // External symlink (points outside install_dir) -> kept
+        let outside = TempDir::new().unwrap();
+        make_symlink(outside.path(), &agent_skills.join("external"));
+        // Real directory with same name -> kept
+        fs::create_dir_all(agent_skills.join("realdir")).unwrap();
+
+        remove_agent_symlinks_in(std::slice::from_ref(&agent_skills), "managed", install_dir.path());
+        remove_agent_symlinks_in(std::slice::from_ref(&agent_skills), "dangling", install_dir.path());
+        remove_agent_symlinks_in(std::slice::from_ref(&agent_skills), "external", install_dir.path());
+        remove_agent_symlinks_in(std::slice::from_ref(&agent_skills), "realdir", install_dir.path());
+
+        assert!(agent_skills.join("managed").symlink_metadata().is_err());
+        assert!(agent_skills.join("dangling").symlink_metadata().is_err());
+        assert!(agent_skills.join("external").symlink_metadata().is_ok());
+        assert!(agent_skills.join("realdir").is_dir());
+    }
+
+    #[test]
+    fn test_batch_removes_files_and_keeps_unlisted_entries() {
+        use tempfile::TempDir;
+        let install_dir = TempDir::new().unwrap();
+
+        let mut db = Database::default();
+        seed_installed(&mut db, install_dir.path(), "tap", "a");
+        seed_installed(&mut db, install_dir.path(), "tap", "b");
+        seed_installed(&mut db, install_dir.path(), "other", "c");
+
+        let results =
+            remove_installed_skills_batch(&mut db, install_dir.path(), &["tap/a".to_string(), "tap/b".to_string()]);
+
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().all(|(_, r)| r.is_ok()));
+        assert!(!install_dir.path().join("tap/a").exists());
+        assert!(!install_dir.path().join("tap/b").exists());
+        assert!(
+            !install_dir.path().join("tap").exists(),
+            "empty tap dir should be cleaned up"
+        );
+        assert!(!db.installed.contains_key("tap/a"));
+        assert!(!db.installed.contains_key("tap/b"));
+        assert!(
+            db.installed.contains_key("other/c"),
+            "skills not in the removal list must stay"
+        );
+        assert!(install_dir.path().join("other/c").exists());
+    }
+
+    #[test]
+    fn test_batch_continues_after_failure() {
+        use tempfile::TempDir;
+        let install_dir = TempDir::new().unwrap();
+
+        let mut db = Database::default();
+        seed_installed(&mut db, install_dir.path(), "tap", "good");
+        // Force a deterministic failure: a regular *file* at the skill's
+        // install path makes remove_dir_all error on all platforms.
+        seed_installed(&mut db, install_dir.path(), "tap", "bad");
+        fs::remove_dir_all(install_dir.path().join("tap/bad")).unwrap();
+        fs::write(install_dir.path().join("tap/bad"), b"not a dir").unwrap();
+
+        let results = remove_installed_skills_batch(
+            &mut db,
+            install_dir.path(),
+            &["tap/bad".to_string(), "tap/good".to_string()],
+        );
+
+        assert_eq!(results.len(), 2);
+        assert!(results[0].1.is_err(), "file-instead-of-dir should fail");
+        assert!(results[1].1.is_ok(), "batch must continue past the failure");
+        assert!(!install_dir.path().join("tap/good").exists());
+        assert!(
+            !db.installed.contains_key("tap/good"),
+            "succeeded entry should be removed from db"
+        );
+        assert!(db.installed.contains_key("tap/bad"), "failed entry should stay in db");
+    }
+
+    #[test]
+    fn test_batch_records_error_for_unparseable_name() {
+        use tempfile::TempDir;
+        let install_dir = TempDir::new().unwrap();
+
+        let mut db = Database::default();
+        seed_installed(&mut db, install_dir.path(), "tap", "a");
+
+        let results = remove_installed_skills_batch(
+            &mut db,
+            install_dir.path(),
+            &["no-slash-here".to_string(), "tap/a".to_string()],
+        );
+
+        assert_eq!(results.len(), 2);
+        assert!(results[0].1.is_err());
+        assert!(results[1].1.is_ok());
+        assert!(!db.installed.contains_key("tap/a"));
     }
 
     /// With `prune = true`, a skill missing upstream is removed from disk and db.
