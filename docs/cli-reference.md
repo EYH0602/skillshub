@@ -20,17 +20,18 @@ skillshub install-all                       # Install all from all added taps
 
 ## Interactive TUI
 ```bash
-skillshub tui                               # Interactive hub: uninstall or update skills
+skillshub tui                               # Interactive, tap-centric skill manager
 ```
 
-`skillshub tui` opens a menu with two workflows:
+`skillshub tui` is organized around taps:
 
-- **Uninstall skills**: multi-select installed skills (space to toggle, type to filter), then confirm. Removes the skill files and their agent symlinks.
-- **Update skills**: multi-select skills, or pick "All skills" to update everything.
+1. **Tap list** (top level): pick a tap to enter it, `Update everything` to update all installed skills, or `Quit`.
+2. **Tap view**: `View/manage skills` or `Delete this tap…` (uninstalls all its skills; the default tap cannot be deleted).
+3. **Skill list**: multi-select the tap's skills (space to toggle, type to filter; installed ones are pre-checked), then choose `Uninstall selected` or `Update selected`.
 
-Requires a terminal (TTY); use the subcommands above in scripts. `Esc` backs out to the menu (exits at the menu itself), `Ctrl-C` exits.
+Requires a terminal (TTY); use the subcommands above in scripts. `Esc` backs up one level (exits at the tap list), `Ctrl-C` exits.
 
-Confirmation friction scales with blast radius: scoped deletes (uninstalling the skills you just selected) use a `y/N` confirm defaulting to No, while full-state deletion (`clean all`) requires typing `yes`. The difference is intentional.
+Confirmation friction scales with blast radius: scoped deletes (uninstalling skills, deleting a tap) use a `y/N` confirm defaulting to No, while full-state deletion (`clean all`) requires typing `yes`. The difference is intentional.
 
 ## Star List Import
 ```bash
