@@ -2,7 +2,7 @@
 name = "skillshub"
 version = "1.2.0"
 edition = "2021"
-rust-version = "1.74.0"
+rust-version = "1.80.0"
 description = "A package manager for AI coding agent skills - like homebrew for skills"
 authors = ["Yifeng He <yfhe.cs@gmail.com>"]
 license = "MIT"
@@ -41,6 +41,7 @@ tabled = "0.17"
 reqwest = { version = "0.11", features = ["json", "blocking"] }
 chrono = { version = "0.4", features = ["serde"] }
 walkdir = "2.5.0"
+inquire = "0.9"
 
 [dependencies.tempfile]
 version = "3.10"
