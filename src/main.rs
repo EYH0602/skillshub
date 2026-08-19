@@ -17,7 +17,7 @@ use commands::{
 use registry::{
     add_skill_from_url, add_tap, import_star_list, install_all, install_all_from_tap, install_skill, list_skills,
     list_taps, migrate_old_installations, needs_migration, remove_tap, search_skills, show_skill_info, uninstall_skill,
-    update_skill, update_tap,
+    update_skill, update_tap, UpdateSelection,
 };
 
 fn main() -> Result<()> {
@@ -33,7 +33,13 @@ fn main() -> Result<()> {
         Commands::Install { name } => install_skill(&name)?,
         Commands::Add { url } => add_skill_from_url(&url)?,
         Commands::Uninstall { name } => uninstall_skill(&name)?,
-        Commands::Update { name, prune } => update_skill(name.as_deref(), prune)?,
+        Commands::Update { name, prune } => update_skill(
+            match name {
+                Some(n) => UpdateSelection::Selected(vec![n]),
+                None => UpdateSelection::All,
+            },
+            prune,
+        )?,
         Commands::List => list_skills()?,
         Commands::Search { query } => search_skills(&query)?,
         Commands::Info { name } => show_skill_info(&name)?,

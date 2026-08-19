@@ -573,24 +573,50 @@ fn prune_or_report_missing(
     }
 }
 
+/// Which skills an update run should target.
+///
+/// An explicit enum rather than empty-slice-means-all: in the TUI an empty
+/// selection means "update nothing", and an empty slice silently meaning
+/// "update everything" is a latent bug one refactor away.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UpdateSelection {
+    /// Update every installed skill.
+    All,
+    /// Update only the named skills (each in `tap/skill` format).
+    Selected(Vec<String>),
+}
+
+/// Resolve an `UpdateSelection` to the concrete list of installed skill names.
+///
+/// `All` yields every installed skill; `Selected` validates each name exactly
+/// as the CLI always has: unparseable names get an "Invalid skill name"
+/// context error, well-formed but uninstalled names bail.
+pub(crate) fn resolve_update_names(db: &Database, selection: &UpdateSelection) -> Result<Vec<String>> {
+    match selection {
+        UpdateSelection::All => Ok(db.installed.keys().cloned().collect()),
+        UpdateSelection::Selected(names) => {
+            let mut resolved = Vec::with_capacity(names.len());
+            for name in names {
+                let skill_id = SkillId::parse(name)
+                    .with_context(|| format!("Invalid skill name '{}'. Use format: tap/skill", name))?;
+
+                if !db::is_skill_installed(db, &skill_id.full_name()) {
+                    anyhow::bail!("Skill '{}' is not installed", skill_id.full_name());
+                }
+
+                resolved.push(skill_id.full_name());
+            }
+            Ok(resolved)
+        }
+    }
+}
+
 /// Update a skill (or all skills) to latest version
-pub fn update_skill(full_name: Option<&str>, prune: bool) -> Result<()> {
+pub fn update_skill(selection: UpdateSelection, prune: bool) -> Result<()> {
     let mut db = db::init_db()?;
     let install_dir = get_skills_install_dir()?;
 
-    let skills_to_update: Vec<String> = match full_name {
-        Some(name) => {
-            let skill_id = SkillId::parse(name)
-                .with_context(|| format!("Invalid skill name '{}'. Use format: tap/skill", name))?;
-
-            if !db::is_skill_installed(&db, &skill_id.full_name()) {
-                anyhow::bail!("Skill '{}' is not installed", skill_id.full_name());
-            }
-
-            vec![skill_id.full_name()]
-        }
-        None => db.installed.keys().cloned().collect(),
-    };
+    let skills_to_update = resolve_update_names(&db, &selection)?;
 
     if skills_to_update.is_empty() {
         println!("No skills installed to update.");
@@ -604,6 +630,9 @@ pub fn update_skill(full_name: Option<&str>, prune: bool) -> Result<()> {
     );
 
     let mut updated_count = 0;
+    // Taps already pulled this run: several skills can share one tap clone,
+    // and pulling it once per skill would repeat the same fetch.
+    let mut pulled_taps: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     for skill_name in skills_to_update {
         let installed = db.installed.get(&skill_name).unwrap().clone();
@@ -735,10 +764,15 @@ pub fn update_skill(full_name: Option<&str>, prune: bool) -> Result<()> {
             continue;
         }
 
-        // Pull latest using resilient pull_or_reclone
-        if let Err(e) = super::git::pull_or_reclone(&clone_dir, &tap.url, tap.branch.as_deref()) {
-            println!("  {} {} (pull failed: {})", "✗".red(), skill_name, e);
-            continue;
+        // Pull latest using resilient pull_or_reclone (once per tap per run).
+        // Mark the tap pulled only on success, so a failed pull is retried
+        // for the next skill of the same tap.
+        if !pulled_taps.contains(&installed.tap) {
+            if let Err(e) = super::git::pull_or_reclone(&clone_dir, &tap.url, tap.branch.as_deref()) {
+                println!("  {} {} (pull failed: {})", "✗".red(), skill_name, e);
+                continue;
+            }
+            pulled_taps.insert(installed.tap.clone());
         }
 
         // Re-discover skills from the freshly pulled clone — the authoritative
@@ -1557,5 +1591,121 @@ mod tests {
     #[test]
     fn test_format_extras_both() {
         assert_eq!(format_extras(true, true), "scripts, refs");
+    }
+
+    /// RAII guard that restores `SKILLSHUB_TEST_HOME` on drop, so tests that
+    /// exercise the real home-based paths (init_db, get_skills_install_dir)
+    /// stay hermetic. Mirrors the guard in registry::tap tests.
+    struct TestHomeGuard(Option<String>);
+
+    impl TestHomeGuard {
+        fn set(home: &Path) -> Self {
+            let prev = std::env::var("SKILLSHUB_TEST_HOME").ok();
+            std::env::set_var("SKILLSHUB_TEST_HOME", home);
+            Self(prev)
+        }
+    }
+
+    impl Drop for TestHomeGuard {
+        fn drop(&mut self) {
+            match self.0.take() {
+                Some(v) => std::env::set_var("SKILLSHUB_TEST_HOME", v),
+                None => std::env::remove_var("SKILLSHUB_TEST_HOME"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_resolve_update_names_all_returns_everything_installed() {
+        use tempfile::TempDir;
+        let install_dir = TempDir::new().unwrap();
+
+        let mut db = Database::default();
+        seed_installed(&mut db, install_dir.path(), "tap", "a");
+        seed_installed(&mut db, install_dir.path(), "other/tap", "b");
+
+        let mut names = resolve_update_names(&db, &UpdateSelection::All).unwrap();
+        names.sort();
+        assert_eq!(names, vec!["other/tap/b".to_string(), "tap/a".to_string()]);
+    }
+
+    #[test]
+    fn test_resolve_update_names_selected_valid_name() {
+        use tempfile::TempDir;
+        let install_dir = TempDir::new().unwrap();
+
+        let mut db = Database::default();
+        seed_installed(&mut db, install_dir.path(), "tap", "a");
+
+        let names = resolve_update_names(&db, &UpdateSelection::Selected(vec!["tap/a".to_string()])).unwrap();
+        assert_eq!(names, vec!["tap/a".to_string()]);
+    }
+
+    #[test]
+    fn test_resolve_update_names_selected_invalid_format_bails() {
+        let db = Database::default();
+
+        let err = resolve_update_names(&db, &UpdateSelection::Selected(vec!["noslash".to_string()])).unwrap_err();
+        assert!(
+            err.to_string().contains("Invalid skill name 'noslash'"),
+            "unexpected error: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_resolve_update_names_selected_not_installed_bails() {
+        use tempfile::TempDir;
+        let install_dir = TempDir::new().unwrap();
+
+        let mut db = Database::default();
+        seed_installed(&mut db, install_dir.path(), "tap", "a");
+
+        let err = resolve_update_names(&db, &UpdateSelection::Selected(vec!["tap/missing".to_string()])).unwrap_err();
+        assert!(
+            err.to_string().contains("Skill 'tap/missing' is not installed"),
+            "unexpected error: {}",
+            err
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_uninstall_skill_not_installed_bails() {
+        use tempfile::TempDir;
+        let temp = TempDir::new().unwrap();
+        let home = temp.path().join("home");
+        let _guard = TestHomeGuard::set(&home);
+
+        let err = uninstall_skill("tap/missing").unwrap_err();
+        assert!(
+            err.to_string().contains("Skill 'tap/missing' is not installed"),
+            "unexpected error: {}",
+            err
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_uninstall_skill_removes_files_and_db_entry() {
+        use tempfile::TempDir;
+        let temp = TempDir::new().unwrap();
+        let home = temp.path().join("home");
+        let _guard = TestHomeGuard::set(&home);
+
+        let install_dir = get_skills_install_dir().unwrap();
+        let mut db = Database::default();
+        seed_installed(&mut db, &install_dir, "tap", "a");
+        seed_installed(&mut db, &install_dir, "tap", "b");
+        db::save_db(&db).unwrap();
+
+        uninstall_skill("tap/a").unwrap();
+
+        assert!(!install_dir.join("tap/a").exists(), "skill dir should be removed");
+        assert!(install_dir.join("tap/b").exists(), "other skills must stay");
+
+        let db = db::load_db().unwrap();
+        assert!(!db.installed.contains_key("tap/a"), "db entry should be removed");
+        assert!(db.installed.contains_key("tap/b"), "other db entries must stay");
     }
 }
