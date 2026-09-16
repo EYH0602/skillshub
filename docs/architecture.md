@@ -107,6 +107,7 @@ Local directory layout:
 | Augment  | `~/.augment`   | `~/.augment/skills`   |
 | Warp     | `~/.warp`      | `~/.warp/skills`      |
 | Cline    | `~/.cline`     | `~/.cline/skills`     |
+| Antigravity | `~/.antigravity` | `~/.antigravity/skills` |
 
 To add a new agent, update `KNOWN_AGENTS` in `src/agent.rs`.
 

@@ -22,6 +22,7 @@ pub const KNOWN_AGENTS: &[(&str, &str)] = &[
     (".augment", "skills"),
     (".warp", "skills"),
     (".cline", "skills"),
+    (".antigravity", "skills"),
 ];
 
 /// Discovered agent info
@@ -100,6 +101,7 @@ mod tests {
         assert!(names.contains(".augment"));
         assert!(names.contains(".warp"));
         assert!(names.contains(".cline"));
+        assert!(names.contains(".antigravity"));
     }
 
     #[test]
