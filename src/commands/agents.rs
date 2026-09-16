@@ -72,7 +72,7 @@ pub fn show_agents() -> Result<()> {
     let rows: Vec<AgentRow> = agents
         .iter()
         .map(|agent| {
-            let agent_name = agent.path.file_name().unwrap().to_string_lossy().to_string();
+            let agent_name = agent.name.to_string();
             let skills_path = agent.path.join(agent.skills_subdir);
 
             // Count skills in the directory

@@ -159,11 +159,7 @@ fn discover_external_skills_internal(
 
     // Scan all agents for external skills
     for agent in agents {
-        let agent_name = agent
-            .path
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_default();
+        let agent_name = agent.name.to_string();
         let skills_path = agent.path.join(agent.skills_subdir);
 
         if !skills_path.exists() || !skills_path.is_dir() {
@@ -280,6 +276,7 @@ mod tests {
         create_skill_dir(&external_skill_path);
 
         let agents = vec![AgentInfo {
+            name: ".claude",
             path: agent_path,
             skills_subdir: "skills",
         }];

@@ -268,6 +268,7 @@ fn test_all_known_agents() {
         (".aider", "skills"),
         (".cursor", "skills"),
         (".continue", "skills"),
+        (".gemini/config", "skills"),
     ];
 
     for (agent, skills_subdir) in &agents {
@@ -329,4 +330,23 @@ fn test_broken_symlink_handling() {
     let meta = link_path.symlink_metadata();
     assert!(meta.is_ok());
     assert!(meta.unwrap().file_type().is_symlink());
+}
+
+#[test]
+#[serial]
+#[cfg(unix)]
+fn test_antigravity_agent_linking() {
+    let mut env = TestEnv::new();
+    env.configure_env();
+
+    let antigravity_skills = env.create_agent_with_skills(".gemini/config", "skills");
+    let skill_dir = create_test_skill(&env, "tap", "antigravity-test-skill");
+
+    let link_path = antigravity_skills.join("antigravity-test-skill");
+    std::os::unix::fs::symlink(&skill_dir, &link_path).unwrap();
+
+    assert!(link_path.exists());
+    assert!(env.is_symlink(&link_path));
+    let target = fs::read_link(&link_path).unwrap();
+    assert_eq!(target, skill_dir);
 }

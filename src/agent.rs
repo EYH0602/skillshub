@@ -3,29 +3,31 @@ use tabled::Tabled;
 
 use crate::paths::get_home_dir;
 
-/// Agent configuration: (agent_dir, skills_subdir)
-pub const KNOWN_AGENTS: &[(&str, &str)] = &[
-    (".claude", "skills"),
-    (".codex", "skills"),
-    (".opencode", "skills"),
-    (".aider", "skills"),
-    (".cursor", "skills"),
-    (".continue", "skills"),
-    (".trae", "skills"),
-    (".kimi", "skills"),
-    (".openclaw", "skills"),
-    (".zeroclaw", "skills"),
-    (".kiro", "steering"),
-    (".gemini", "skills"),
-    (".copilot", "skills"),
-    (".junie", "skills"),
-    (".augment", "skills"),
-    (".warp", "skills"),
-    (".cline", "skills"),
+/// Agent configuration: (name, agent_dir, skills_subdir)
+pub const KNOWN_AGENTS: &[(&str, &str, &str)] = &[
+    (".claude", ".claude", "skills"),
+    (".codex", ".codex", "skills"),
+    (".opencode", ".opencode", "skills"),
+    (".aider", ".aider", "skills"),
+    (".cursor", ".cursor", "skills"),
+    (".continue", ".continue", "skills"),
+    (".trae", ".trae", "skills"),
+    (".kimi", ".kimi", "skills"),
+    (".openclaw", ".openclaw", "skills"),
+    (".zeroclaw", ".zeroclaw", "skills"),
+    (".kiro", ".kiro", "steering"),
+    (".gemini", ".gemini", "skills"),
+    (".copilot", ".copilot", "skills"),
+    (".junie", ".junie", "skills"),
+    (".augment", ".augment", "skills"),
+    (".warp", ".warp", "skills"),
+    (".cline", ".cline", "skills"),
+    (".antigravity", ".gemini/config", "skills"),
 ];
 
 /// Discovered agent info
 pub struct AgentInfo {
+    pub name: &'static str,
     pub path: PathBuf,
     pub skills_subdir: &'static str,
 }
@@ -48,10 +50,17 @@ pub fn discover_agents() -> Vec<AgentInfo> {
     let mut agents = Vec::new();
 
     if let Some(home) = get_home_dir() {
-        for (agent_dir, skills_subdir) in KNOWN_AGENTS {
+        for (name, agent_dir, skills_subdir) in KNOWN_AGENTS {
             let agent_path = home.join(agent_dir);
-            if agent_path.exists() && agent_path.is_dir() {
+            let exists = if *name == ".antigravity" {
+                (agent_path.exists() && agent_path.is_dir())
+                    || (home.join(".gemini/antigravity-cli").exists() && home.join(".gemini/antigravity-cli").is_dir())
+            } else {
+                agent_path.exists() && agent_path.is_dir()
+            };
+            if exists {
                 agents.push(AgentInfo {
+                    name,
                     path: agent_path,
                     skills_subdir,
                 });
@@ -66,7 +75,7 @@ pub fn discover_agents() -> Vec<AgentInfo> {
 pub fn known_agent_names() -> String {
     KNOWN_AGENTS
         .iter()
-        .map(|(name, _)| *name)
+        .map(|(name, _, _)| *name)
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -77,7 +86,8 @@ mod tests {
 
     #[test]
     fn test_known_agents_have_skills_subdir() {
-        for (agent, subdir) in KNOWN_AGENTS {
+        for (name, agent, subdir) in KNOWN_AGENTS {
+            assert!(!name.is_empty());
             assert!(!agent.is_empty());
             assert!(!subdir.is_empty());
         }
@@ -100,6 +110,7 @@ mod tests {
         assert!(names.contains(".augment"));
         assert!(names.contains(".warp"));
         assert!(names.contains(".cline"));
+        assert!(names.contains(".antigravity"));
     }
 
     #[test]
@@ -111,10 +122,7 @@ mod tests {
 
     #[test]
     fn test_discover_agents_returns_vec() {
-        // This test just verifies the function doesn't panic
-        // and returns a valid Vec (may be empty if no agents installed)
         let agents = discover_agents();
-        // Each agent should have a valid path and subdir
         for agent in agents {
             assert!(!agent.skills_subdir.is_empty());
             assert!(agent.path.exists());
