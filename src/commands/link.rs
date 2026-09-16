@@ -60,7 +60,7 @@ pub fn link_to_agents() -> Result<()> {
 
     // Step 3: Link skills to each agent
     for agent in &agents {
-        let agent_name = agent.path.file_name().unwrap().to_string_lossy();
+        let agent_name = agent.name;
         let link_path = agent.path.join(agent.skills_subdir);
 
         // Ensure skills directory exists and is a directory (not a symlink to skillshub)
@@ -122,7 +122,7 @@ pub fn link_to_agents() -> Result<()> {
             let skill_link_path = link_path.join(&ext_skill.name);
 
             // Skip if this is the source agent (skill already exists there)
-            let current_agent_name = format!(".{}", agent_name);
+            let current_agent_name = format!(".{}", agent_name.trim_start_matches('.'));
             if ext_skill.source_agent == current_agent_name || ext_skill.source_agent == agent_name {
                 continue;
             }
@@ -191,11 +191,7 @@ fn discover_external_skills(
 
     // Scan all agents for external skills
     for agent in agents {
-        let agent_name = agent
-            .path
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_default();
+        let agent_name = agent.name.to_string();
         let skills_path = agent.path.join(agent.skills_subdir);
 
         if !skills_path.exists() || !skills_path.is_dir() {

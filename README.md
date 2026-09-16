@@ -222,7 +222,7 @@ Skillshub automatically detects and links to these coding agents:
 | Augment  | `~/.augment`   | `~/.augment/skills`   |
 | Warp     | `~/.warp`      | `~/.warp/skills`      |
 | Cline    | `~/.cline`     | `~/.cline/skills`     |
-| Antigravity | `~/.antigravity` | `~/.antigravity/skills` |
+| Antigravity | `~/.gemini/config` | `~/.gemini/config/skills` |
 
 ## GitHub API & Authentication
 

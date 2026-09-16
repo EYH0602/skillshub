@@ -41,11 +41,7 @@ fn remove_managed_symlinks(agents: &[AgentInfo], skills_dir_canonical: &Path) ->
     let mut total_removed = 0;
 
     for agent in agents {
-        let agent_name = agent
-            .path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| agent.path.display().to_string());
+        let agent_name = agent.name;
         let skills_path = agent.path.join(agent.skills_subdir);
 
         if !skills_path.exists() {
@@ -185,11 +181,7 @@ fn clean_all_with_input(confirm: bool, input: &mut impl BufRead) -> Result<()> {
             agents.len()
         );
         for agent in &agents {
-            let agent_name = agent
-                .path
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| agent.path.display().to_string());
+            let agent_name = agent.name;
             let skills_path = agent.path.join(agent.skills_subdir);
             println!("      {} ({})", agent_name, display_path_with_tilde(&skills_path));
         }
