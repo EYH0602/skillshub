@@ -307,6 +307,8 @@ Optional fields:
 
 The `license`, `metadata.author`, and `metadata.version` fields are displayed by `skillshub info` when present.
 
+If the frontmatter is not valid YAML (for example, an unquoted `description` that contains `": "`), skillshub falls back to a line-based parser for `name`, `description`, and `license`, and prints a warning when the tap is added or updated. Quote such values or use a block scalar (`description: >-`) to avoid the warning.
+
 Optional subdirectories:
 - `scripts/` - Executable scripts the agent can run
 - `references/` - Documentation to be loaded into context

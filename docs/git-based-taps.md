@@ -60,7 +60,7 @@ update (skill)
 
 ### `src/registry/tap.rs`
 
-- **`discover_skills_from_local()`** — Walks a local clone using `walkdir` crate, finding all `SKILL.md` files. Skips `.git`, `node_modules`, `target`, `test`, `tests`, `examples`, `fixtures`, `vendor`, `benchmark`, and dot-prefixed directories. Warns on duplicate skill names and malformed frontmatter.
+- **`discover_skills_from_local()`** — Walks a local clone using `walkdir` crate, finding all `SKILL.md` files. Skips `.git`, `node_modules`, `target`, `test`, `tests`, `examples`, `fixtures`, `vendor`, `benchmark`, and dot-prefixed directories. Warns on duplicate skill names and malformed frontmatter; frontmatter that is not valid YAML is parsed leniently with a warning (see `lenient-frontmatter.md`).
 - **`add_tap()`** — Clones repo, discovers skills, caches registry.
 - **`update_single_tap()`** — Pulls/re-clones, re-discovers, diffs old vs new registry.
 
