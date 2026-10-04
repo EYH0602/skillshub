@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::time::{Duration, SystemTime};
 
 use super::models::{GitHubUrl, SkillEntry, TapRegistry};
-use crate::skill::SkillMetadata;
+use crate::skill::{parse_frontmatter, warn_invalid_frontmatter, warn_lenient_frontmatter};
 
 /// GraphQL API URL (overridden in tests via SKILLSHUB_GITHUB_GRAPHQL_URL)
 fn graphql_url() -> String {
@@ -525,15 +525,26 @@ pub fn discover_skills_from_repo(github_url: &GitHubUrl, tap_name: &str) -> Resu
         match send_with_retry(|| with_auth(client.get(&skill_md_url)), &skill_md_url) {
             Ok(resp) if resp.status().is_success() => {
                 if let Ok(content) = resp.text() {
-                    if let Some((name, description)) = parse_skill_md_content(&content) {
-                        skills.insert(
-                            name.clone(),
-                            SkillEntry {
-                                path: skill_path.clone(),
-                                description,
-                                homepage: None,
-                            },
-                        );
+                    let location = if skill_path.is_empty() {
+                        "SKILL.md".to_string()
+                    } else {
+                        format!("{}/SKILL.md", skill_path)
+                    };
+                    match parse_frontmatter(&content) {
+                        Ok(parsed) => {
+                            if let Some(reason) = &parsed.lenient_reason {
+                                warn_lenient_frontmatter(&location, reason);
+                            }
+                            skills.insert(
+                                parsed.metadata.name,
+                                SkillEntry {
+                                    path: skill_path.clone(),
+                                    description: parsed.metadata.description,
+                                    homepage: None,
+                                },
+                            );
+                        }
+                        Err(err) => warn_invalid_frontmatter(&location, &err),
                     }
                 }
             }
@@ -564,20 +575,6 @@ pub fn discover_skills_from_repo(github_url: &GitHubUrl, tap_name: &str) -> Resu
         description,
         skills,
     })
-}
-
-/// Parse SKILL.md content to extract name and description from YAML frontmatter
-pub(crate) fn parse_skill_md_content(content: &str) -> Option<(String, Option<String>)> {
-    // Extract YAML frontmatter between --- markers
-    let parts: Vec<&str> = content.splitn(3, "---").collect();
-    if parts.len() < 3 {
-        return None;
-    }
-
-    let yaml_content = parts[1].trim();
-    let metadata: SkillMetadata = serde_yaml::from_str(yaml_content).ok()?;
-
-    Some((metadata.name, metadata.description))
 }
 
 /// Extract skill directory paths from a list of tree entries.
@@ -682,9 +679,12 @@ pub fn discover_skills_from_gist(gist: &GistResponse) -> Vec<(String, String)> {
     // Level 1: Check for a file literally named "SKILL.md"
     if let Some(skill_md) = gist.files.get("SKILL.md") {
         if let Some(content) = &skill_md.content {
-            if let Some((name, _desc)) = parse_skill_md_content(content) {
-                if is_safe_skill_name(&name) {
-                    return vec![(name, content.clone())];
+            if let Ok(parsed) = parse_frontmatter(content) {
+                if is_safe_skill_name(&parsed.metadata.name) {
+                    if let Some(reason) = &parsed.lenient_reason {
+                        warn_lenient_frontmatter("SKILL.md", reason);
+                    }
+                    return vec![(parsed.metadata.name, content.clone())];
                 }
             }
         }
@@ -692,11 +692,14 @@ pub fn discover_skills_from_gist(gist: &GistResponse) -> Vec<(String, String)> {
 
     // Level 2: Scan all files for valid skill frontmatter (requires name + description)
     let mut skills = Vec::new();
-    for file in gist.files.values() {
+    for (filename, file) in &gist.files {
         if let Some(content) = &file.content {
-            if let Some((name, desc)) = parse_skill_md_content(content) {
-                if desc.is_some() && is_safe_skill_name(&name) {
-                    skills.push((name, content.clone()));
+            if let Ok(parsed) = parse_frontmatter(content) {
+                if parsed.metadata.description.is_some() && is_safe_skill_name(&parsed.metadata.name) {
+                    if let Some(reason) = &parsed.lenient_reason {
+                        warn_lenient_frontmatter(filename, reason);
+                    }
+                    skills.push((parsed.metadata.name, content.clone()));
                 }
             }
         }
@@ -895,6 +898,12 @@ pub fn fetch_star_list_repos(username: &str, list_name: &str) -> Result<Vec<Stri
 mod tests {
     use super::*;
     use serial_test::serial;
+
+    /// Extract (name, description) from SKILL.md content
+    fn parse_skill_md_content(content: &str) -> Option<(String, Option<String>)> {
+        let parsed = parse_frontmatter(content).ok()?;
+        Some((parsed.metadata.name, parsed.metadata.description))
+    }
 
     #[test]
     fn test_build_client_succeeds() {
