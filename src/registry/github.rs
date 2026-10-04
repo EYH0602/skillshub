@@ -983,6 +983,30 @@ name: minimal-skill
     }
 
     #[test]
+    fn test_parse_skill_md_content_unquoted_colon_in_description() {
+        // Real-world frontmatter (QingYunA/answer-me-with-html): an unquoted
+        // description containing ": " is invalid strict YAML but should still parse.
+        let content = r#"---
+name: answer-me-with-html
+description: When an answer is complex, renders it as a one-page visual HTML explainer: the model writes only a short draft. Also use it when the user says `/answer-me-with-html config`.
+---
+# Answer me with HTML
+"#;
+        let result = parse_skill_md_content(content);
+        assert!(result.is_some(), "unquoted description with ': ' should be tolerated");
+        let (name, desc) = result.unwrap();
+        assert_eq!(name, "answer-me-with-html");
+        assert_eq!(
+            desc.as_deref(),
+            Some(
+                "When an answer is complex, renders it as a one-page visual HTML explainer: \
+                 the model writes only a short draft. Also use it when the user says \
+                 `/answer-me-with-html config`."
+            )
+        );
+    }
+
+    #[test]
     fn test_parse_skill_md_content_invalid() {
         let content = "# No frontmatter here";
         let result = parse_skill_md_content(content);

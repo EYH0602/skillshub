@@ -186,6 +186,24 @@ Some content here.
     }
 
     #[test]
+    fn test_parse_skill_metadata_unquoted_colon_in_description() {
+        let dir = TempDir::new().unwrap();
+        let skill_md = dir.path().join("SKILL.md");
+        fs::write(
+            &skill_md,
+            "---\nname: answer-me-with-html\ndescription: Renders a one-page HTML explainer: the model writes a short draft.\n---\n# Body\n",
+        )
+        .unwrap();
+
+        let metadata = parse_skill_metadata(&skill_md).expect("unquoted ': ' in description should be tolerated");
+        assert_eq!(metadata.name, "answer-me-with-html");
+        assert_eq!(
+            metadata.description.as_deref(),
+            Some("Renders a one-page HTML explainer: the model writes a short draft.")
+        );
+    }
+
+    #[test]
     fn test_parse_skill_metadata_with_allowed_tools_string() {
         let dir = TempDir::new().unwrap();
         let skill_md = dir.path().join("SKILL.md");

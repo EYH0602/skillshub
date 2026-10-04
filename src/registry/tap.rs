@@ -1645,6 +1645,34 @@ mod tests {
     }
 
     #[test]
+    fn test_discover_tolerates_unquoted_colon_in_description() {
+        let temp = tempfile::TempDir::new().unwrap();
+
+        // Mirrors QingYunA/answer-me-with-html: the only skill in the repo has an
+        // unquoted description containing ": ", which is invalid strict YAML.
+        let skill_dir = temp.path().join("skills").join("answer-me-with-html");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: answer-me-with-html\ndescription: Renders a one-page HTML explainer: the model writes a short draft.\n---\nContent",
+        )
+        .unwrap();
+
+        let registry = discover_skills_from_local(temp.path(), "test/tap")
+            .expect("skill with unquoted ': ' in description should be discovered");
+
+        let entry = registry
+            .skills
+            .get("answer-me-with-html")
+            .expect("answer-me-with-html should be in the registry");
+        assert_eq!(entry.path, "skills/answer-me-with-html");
+        assert_eq!(
+            entry.description.as_deref(),
+            Some("Renders a one-page HTML explainer: the model writes a short draft.")
+        );
+    }
+
+    #[test]
     fn test_discover_warns_duplicate_names() {
         let temp = tempfile::TempDir::new().unwrap();
 
