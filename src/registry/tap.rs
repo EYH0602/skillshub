@@ -13,11 +13,12 @@ use super::db::{self, DEFAULT_TAP_NAME};
 use super::git::{git_clone, pull_or_reclone, tap_clone_path};
 use super::github::{
     discover_skills_from_repo, fetch_star_list_repos, is_gist_url, is_safe_skill_name, parse_github_url,
-    parse_skill_md_content, parse_star_list_url,
+    parse_star_list_url,
 };
 use super::models::{Database, SkillEntry, SkillId, TapInfo, TapRegistry};
 use super::skill::remove_installed_skill_files;
 use crate::paths::{get_skills_install_dir, get_taps_clone_dir};
+use crate::skill::{parse_frontmatter, warn_invalid_frontmatter, warn_lenient_frontmatter};
 use crate::util::truncate_string;
 
 const TAP_URL_MAX_LEN: usize = 50;
@@ -640,11 +641,14 @@ pub(crate) fn discover_skills_from_local(clone_dir: &Path, tap_name: &str) -> Re
     {
         if entry.file_name() == "SKILL.md" && entry.file_type().is_file() {
             if let Ok(content) = std::fs::read_to_string(entry.path()) {
-                match parse_skill_md_content(&content) {
-                    Some((name, description)) => {
+                let rel_path = entry.path().strip_prefix(clone_dir).unwrap_or(entry.path());
+                match parse_frontmatter(&content) {
+                    Ok(parsed) => {
+                        let name = parsed.metadata.name;
+                        let description = parsed.metadata.description;
+
                         // Reject names with path traversal sequences
                         if !is_safe_skill_name(&name) {
-                            let rel_path = entry.path().strip_prefix(clone_dir).unwrap_or(entry.path());
                             eprintln!(
                                 "  {} Skipping {}: unsafe skill name '{}'",
                                 "!".yellow(),
@@ -652,6 +656,10 @@ pub(crate) fn discover_skills_from_local(clone_dir: &Path, tap_name: &str) -> Re
                                 name
                             );
                             continue;
+                        }
+
+                        if let Some(reason) = &parsed.lenient_reason {
+                            warn_lenient_frontmatter(&rel_path.display().to_string(), reason);
                         }
 
                         let skill_path = entry
@@ -680,15 +688,7 @@ pub(crate) fn discover_skills_from_local(clone_dir: &Path, tap_name: &str) -> Re
                             );
                         }
                     }
-                    None => {
-                        // Warn about malformed SKILL.md
-                        let rel_path = entry.path().strip_prefix(clone_dir).unwrap_or(entry.path());
-                        eprintln!(
-                            "  {} Skipping {}: invalid frontmatter (missing name field)",
-                            "!".yellow(),
-                            rel_path.display()
-                        );
-                    }
+                    Err(err) => warn_invalid_frontmatter(&rel_path.display().to_string(), &err),
                 }
             }
         }
@@ -1642,6 +1642,34 @@ mod tests {
         assert_eq!(registry.skills.len(), 1);
         assert!(registry.skills.contains_key("good-skill"));
         assert!(!registry.skills.contains_key("bad-skill"));
+    }
+
+    #[test]
+    fn test_discover_tolerates_unquoted_colon_in_description() {
+        let temp = tempfile::TempDir::new().unwrap();
+
+        // Mirrors QingYunA/answer-me-with-html: the only skill in the repo has an
+        // unquoted description containing ": ", which is invalid strict YAML.
+        let skill_dir = temp.path().join("skills").join("answer-me-with-html");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: answer-me-with-html\ndescription: Renders a one-page HTML explainer: the model writes a short draft.\n---\nContent",
+        )
+        .unwrap();
+
+        let registry = discover_skills_from_local(temp.path(), "test/tap")
+            .expect("skill with unquoted ': ' in description should be discovered");
+
+        let entry = registry
+            .skills
+            .get("answer-me-with-html")
+            .expect("answer-me-with-html should be in the registry");
+        assert_eq!(entry.path, "skills/answer-me-with-html");
+        assert_eq!(
+            entry.description.as_deref(),
+            Some("Renders a one-page HTML explainer: the model writes a short draft.")
+        );
     }
 
     #[test]

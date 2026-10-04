@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use colored::Colorize;
 use serde::Deserialize;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -88,25 +89,155 @@ pub struct Skill {
     pub has_references: bool,
 }
 
+/// Frontmatter parsed from a SKILL.md file
+#[derive(Debug)]
+pub struct ParsedFrontmatter {
+    pub metadata: SkillMetadata,
+    /// The strict YAML error, set when the lenient fallback parser was used
+    pub lenient_reason: Option<String>,
+}
+
+/// Parse SKILL.md content into metadata.
+///
+/// Tries strict YAML first. If that fails, falls back to a line-based parser for
+/// `name`, `description` and `license`, so common hand-written frontmatter such as
+/// an unquoted description containing `": "` still works.
+pub fn parse_frontmatter(content: &str) -> Result<ParsedFrontmatter> {
+    // Extract YAML frontmatter between --- markers
+    let parts: Vec<&str> = content.splitn(3, "---").collect();
+    if parts.len() < 3 {
+        anyhow::bail!("Invalid SKILL.md format: missing YAML frontmatter");
+    }
+
+    // Keep the leading newline so YAML error line numbers match the file
+    let yaml_content = parts[1].trim_end();
+    match serde_yaml::from_str::<SkillMetadata>(yaml_content) {
+        Ok(metadata) => Ok(ParsedFrontmatter {
+            metadata,
+            lenient_reason: None,
+        }),
+        Err(err) => match parse_frontmatter_lenient(yaml_content) {
+            Some(metadata) => Ok(ParsedFrontmatter {
+                metadata,
+                lenient_reason: Some(err.to_string()),
+            }),
+            None => Err(anyhow::anyhow!("Failed to parse YAML frontmatter: {}", err)),
+        },
+    }
+}
+
+/// Line-based fallback for frontmatter that is not valid YAML.
+///
+/// Reads top-level `key: value` lines; the value is everything after the first
+/// colon, so later `": "` sequences stay in the value. Indented lines continue the
+/// previous key. Only `name`, `description` and `license` are extracted.
+fn parse_frontmatter_lenient(yaml: &str) -> Option<SkillMetadata> {
+    let mut fields: Vec<(String, Vec<String>)> = Vec::new();
+
+    for line in yaml.lines() {
+        let is_indented = line.starts_with(' ') || line.starts_with('\t');
+        if is_indented || line.trim().is_empty() {
+            if let Some((_, parts)) = fields.last_mut() {
+                parts.push(line.trim().to_string());
+            }
+            continue;
+        }
+        if line.starts_with('#') {
+            continue;
+        }
+
+        match split_top_level_key(line) {
+            Some((key, value)) => fields.push((key.to_string(), vec![value.trim().to_string()])),
+            // Unindented non-key line: stop attaching continuation lines
+            None => fields.push((String::new(), Vec::new())),
+        }
+    }
+
+    let get = |key: &str| {
+        fields
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, parts)| join_lenient_value(parts))
+            .filter(|v| !v.is_empty())
+    };
+
+    Some(SkillMetadata {
+        name: get("name")?,
+        description: get("description"),
+        allowed_tools: AllowedTools::default(),
+        license: get("license"),
+        metadata: None,
+    })
+}
+
+/// Split `key: value` (or `key:`) where key is a simple identifier.
+fn split_top_level_key(line: &str) -> Option<(&str, &str)> {
+    let (key, rest) = line.split_once(':')?;
+    let key_is_valid = !key.is_empty() && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    if !key_is_valid || !(rest.is_empty() || rest.starts_with(' ') || rest.starts_with('\t')) {
+        return None;
+    }
+    Some((key, rest))
+}
+
+/// Join a key's inline value and continuation lines into one string.
+fn join_lenient_value(parts: &[String]) -> String {
+    let (first, rest) = match parts.split_first() {
+        Some(split) => split,
+        None => return String::new(),
+    };
+
+    // Block scalars: `|` keeps newlines, `>` folds them into spaces
+    let indicator = first.trim_end_matches(['-', '+']);
+    if indicator == "|" || indicator == ">" {
+        let separator = if indicator == "|" { "\n" } else { " " };
+        let lines: Vec<&str> = rest.iter().map(String::as_str).collect();
+        return lines.join(separator).trim().to_string();
+    }
+
+    let joined = std::iter::once(first)
+        .chain(rest)
+        .filter(|p| !p.is_empty())
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join(" ");
+    strip_matching_quotes(&joined).to_string()
+}
+
+fn strip_matching_quotes(value: &str) -> &str {
+    for quote in ['"', '\''] {
+        if value.len() >= 2 && value.starts_with(quote) && value.ends_with(quote) {
+            return &value[1..value.len() - 1];
+        }
+    }
+    value
+}
+
+/// Print a warning that a SKILL.md was parsed with the lenient fallback.
+pub fn warn_lenient_frontmatter(location: &str, reason: &str) {
+    eprintln!(
+        "  {} {}: frontmatter is not valid YAML ({}); parsed leniently",
+        "!".yellow(),
+        location,
+        reason
+    );
+}
+
+/// Print a warning that a SKILL.md was skipped because its frontmatter could not be parsed.
+pub fn warn_invalid_frontmatter(location: &str, err: &anyhow::Error) {
+    eprintln!("  {} Skipping {}: {}", "!".yellow(), location, err);
+}
+
 /// Parse skill metadata from SKILL.md file
+///
+/// Falls back to lenient parsing silently; warnings are printed at discovery time.
 pub fn parse_skill_metadata(skill_md_path: &Path) -> Result<SkillMetadata> {
     let content =
         fs::read_to_string(skill_md_path).with_context(|| format!("Failed to read {}", skill_md_path.display()))?;
 
-    // Extract YAML frontmatter between --- markers
-    let parts: Vec<&str> = content.splitn(3, "---").collect();
-    if parts.len() < 3 {
-        anyhow::bail!(
-            "Invalid SKILL.md format: missing YAML frontmatter in {}",
-            skill_md_path.display()
-        );
-    }
-
-    let yaml_content = parts[1].trim();
-    let metadata: SkillMetadata = serde_yaml::from_str(yaml_content)
-        .with_context(|| format!("Failed to parse YAML frontmatter in {}", skill_md_path.display()))?;
-
-    Ok(metadata)
+    let parsed =
+        parse_frontmatter(&content).with_context(|| format!("Invalid SKILL.md: {}", skill_md_path.display()))?;
+    Ok(parsed.metadata)
 }
 
 /// Discover all skills in a directory
@@ -183,6 +314,24 @@ Some content here.
         let metadata = parse_skill_metadata(&skill_md).unwrap();
         assert_eq!(metadata.name, "test-skill");
         assert_eq!(metadata.description, Some("A test skill".to_string()));
+    }
+
+    #[test]
+    fn test_parse_skill_metadata_unquoted_colon_in_description() {
+        let dir = TempDir::new().unwrap();
+        let skill_md = dir.path().join("SKILL.md");
+        fs::write(
+            &skill_md,
+            "---\nname: answer-me-with-html\ndescription: Renders a one-page HTML explainer: the model writes a short draft.\n---\n# Body\n",
+        )
+        .unwrap();
+
+        let metadata = parse_skill_metadata(&skill_md).expect("unquoted ': ' in description should be tolerated");
+        assert_eq!(metadata.name, "answer-me-with-html");
+        assert_eq!(
+            metadata.description.as_deref(),
+            Some("Renders a one-page HTML explainer: the model writes a short draft.")
+        );
     }
 
     #[test]
@@ -282,6 +431,69 @@ name: minimal-skill
 
         let result = parse_skill_metadata(&skill_md);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_frontmatter_valid_yaml_is_strict() {
+        let content = "---\nname: s\ndescription: \"quoted: ok\"\nallowed-tools: Read, Write\n---\n";
+        let parsed = parse_frontmatter(content).unwrap();
+        assert!(parsed.lenient_reason.is_none());
+        assert_eq!(parsed.metadata.description.as_deref(), Some("quoted: ok"));
+        assert_eq!(parsed.metadata.allowed_tools.0, vec!["Read", "Write"]);
+    }
+
+    #[test]
+    fn test_parse_frontmatter_lenient_sets_reason() {
+        let content = "---\nname: s\ndescription: a: b\n---\n";
+        let parsed = parse_frontmatter(content).unwrap();
+        let reason = parsed.lenient_reason.expect("lenient fallback should be reported");
+        assert!(
+            reason.contains("line 3"),
+            "error line should match the file: {}",
+            reason
+        );
+        assert_eq!(parsed.metadata.description.as_deref(), Some("a: b"));
+    }
+
+    #[test]
+    fn test_parse_frontmatter_lenient_continuation_and_other_keys() {
+        let content =
+            "---\nname: s\ndescription: first: part\n  second part\nlicense: MIT\nmetadata:\n  author: x: y\n---\n";
+        let parsed = parse_frontmatter(content).unwrap();
+        assert!(parsed.lenient_reason.is_some());
+        assert_eq!(parsed.metadata.name, "s");
+        assert_eq!(parsed.metadata.description.as_deref(), Some("first: part second part"));
+        assert_eq!(parsed.metadata.license.as_deref(), Some("MIT"));
+        assert!(parsed.metadata.metadata.is_none());
+    }
+
+    #[test]
+    fn test_parse_frontmatter_lenient_strips_quotes() {
+        // The stray "]" makes strict YAML fail; the quoted name must still be unwrapped
+        let content = "---\nname: \"s\"\ndescription: use it: now ]\n---\n";
+        let parsed = parse_frontmatter(content).unwrap();
+        assert!(parsed.lenient_reason.is_some());
+        assert_eq!(parsed.metadata.name, "s");
+        assert_eq!(parsed.metadata.description.as_deref(), Some("use it: now ]"));
+    }
+
+    #[test]
+    fn test_parse_frontmatter_lenient_block_scalars() {
+        let content = "---\nname: s\nlicense: a: b\ndescription: >-\n  folded\n  text\n---\n";
+        let parsed = parse_frontmatter(content).unwrap();
+        assert!(parsed.lenient_reason.is_some());
+        assert_eq!(parsed.metadata.description.as_deref(), Some("folded text"));
+
+        let content = "---\nname: s\nlicense: a: b\ndescription: |\n  line one\n  line two\n---\n";
+        let parsed = parse_frontmatter(content).unwrap();
+        assert_eq!(parsed.metadata.description.as_deref(), Some("line one\nline two"));
+    }
+
+    #[test]
+    fn test_parse_frontmatter_lenient_requires_name() {
+        let content = "---\ndescription: a: b\n---\n";
+        let err = parse_frontmatter(content).unwrap_err();
+        assert!(err.to_string().contains("Failed to parse YAML frontmatter"));
     }
 
     #[test]
