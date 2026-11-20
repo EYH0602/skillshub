@@ -4,7 +4,7 @@ title: "Skillshub"
 authors:
   - family-names: "He"
     given-names: "Yifeng"
-version: "1.1.0"
+version: "1.5.0"
 repository-code: "https://github.com/EYH0602/skillshub"
 url: "https://github.com/EYH0602/skillshub"
 abstract: "A package manager for AI coding agent skills."
