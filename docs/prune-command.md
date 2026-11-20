@@ -38,9 +38,11 @@ checks only sources that still have installed skills:
 
 A complete scan with zero skills is a valid empty source: every installed
 skill from that tap is an orphan. Anything less — a failed pull or clone, an
-interrupted scan, a gist whose files come back without content — keeps that
-source's skills and makes the run exit nonzero, after every other source was
-still checked.
+interrupted scan, a gist whose files come back without content, whose
+`SKILL.md` fails to parse, or with a frontmatter-shaped file that fails to
+parse — keeps that source's skills and makes the run exit nonzero, after
+every other source was still checked. Plain gist files without frontmatter,
+such as a README, are ordinary content and do not affect the verdict.
 
 Removal reuses the same code as `uninstall`: installed files, the database
 entry, matching agent symlinks, and an emptied tap directory. Candidates are

@@ -13,12 +13,12 @@ use anyhow::{bail, Context, Result};
 use colored::Colorize;
 
 use super::db;
-use super::git::{git_clone, pull_or_reclone, tap_clone_path};
-use super::github::{discover_skills_from_gist, fetch_gist, GistResponse};
+use super::github::{discover_skills_from_gist, fetch_gist, is_safe_skill_name, GistResponse};
 use super::models::{Database, SkillId};
 use super::skill::remove_installed_skill_files;
-use super::tap::walk_local_skills;
-use crate::paths::{get_skills_install_dir, get_taps_clone_dir};
+use super::tap::{ensure_fresh_clone, walk_local_skills};
+use crate::paths::get_skills_install_dir;
+use crate::skill::parse_frontmatter;
 
 /// Where an installed skill comes from, for source grouping.
 ///
@@ -118,7 +118,7 @@ pub fn prune_skills(tap_scope: Option<&str>, dry_run: bool) -> Result<()> {
         names.sort();
     }
     let mut candidates: Vec<String> = Vec::new();
-    let mut failed_sources: usize = 0;
+    let mut source_failures: usize = 0;
     for (source, skills) in &by_source {
         match check_source(&db, source) {
             Ok(upstream) => {
@@ -130,7 +130,7 @@ pub fn prune_skills(tap_scope: Option<&str>, dry_run: bool) -> Result<()> {
                 }
             }
             Err(e) => {
-                failed_sources += 1;
+                source_failures += 1;
                 eprintln!(
                     "  {} {} (source check failed: {}); kept {} skill(s)",
                     "✗".red(),
@@ -144,11 +144,12 @@ pub fn prune_skills(tap_scope: Option<&str>, dry_run: bool) -> Result<()> {
 
     candidates.sort();
 
-    if candidates.is_empty() && failed_sources == 0 {
+    if candidates.is_empty() && source_failures == 0 {
         println!("{} No orphaned skills found.", "✓".green());
         return Ok(());
     }
 
+    let mut removal_failures = 0usize;
     if !candidates.is_empty() {
         println!(
             "\n{} {} installed skill(s) no longer in their source:",
@@ -164,7 +165,6 @@ pub fn prune_skills(tap_scope: Option<&str>, dry_run: bool) -> Result<()> {
         } else {
             let install_dir = get_skills_install_dir()?;
             let mut removed = 0usize;
-            let mut removal_failures = 0usize;
             for name in &candidates {
                 match SkillId::parse(name) {
                     Some(skill_id) => match remove_installed_skill_files(&mut db, &install_dir, &skill_id) {
@@ -184,14 +184,20 @@ pub fn prune_skills(tap_scope: Option<&str>, dry_run: bool) -> Result<()> {
                 db::save_db(&db)?;
                 println!("\n{} Pruned {} skill(s)", "✓".green(), removed);
             }
-            failed_sources += removal_failures;
         }
     }
 
-    if failed_sources > 0 {
+    if source_failures > 0 || removal_failures > 0 {
+        let mut reasons = Vec::new();
+        if source_failures > 0 {
+            reasons.push(format!("{} source check(s) failed", source_failures));
+        }
+        if removal_failures > 0 {
+            reasons.push(format!("{} removal(s) failed", removal_failures));
+        }
         bail!(
-            "{} source(s) could not be fully checked; run again once the failures are resolved",
-            failed_sources
+            "prune incomplete: {}; run again once the failures are resolved",
+            reasons.join(", ")
         );
     }
 
@@ -241,14 +247,37 @@ fn source_in_clone(clone_dir: &Path, source_path: &Option<String>) -> bool {
 
 /// Collect the skill names a gist currently lists.
 ///
-/// `Err` when the API returned files without content (truncated response):
-/// names missing for that reason are not proof of deletion.
-fn gist_skill_names(gist_id: &str, gist: &GistResponse) -> Result<HashSet<String>> {
+/// Files the API returned without content make the gist unverifiable: names
+/// missing for that reason are not proof of deletion. So are ambiguity
+/// signals — a `SKILL.md` that fails to parse or carries an unsafe name, and
+/// any frontmatter-shaped file (starting with `---`) that fails to parse.
+/// Plain files without frontmatter, such as a README, are ordinary gist
+/// content and do not affect the verdict.
+fn gist_skill_names(gist: &GistResponse) -> Result<HashSet<String>> {
     if gist.files.values().any(|f| f.content.is_none()) {
-        bail!(
-            "gist {} has file(s) whose content the API did not return; cannot verify its skills",
-            gist_id
-        );
+        bail!("file content missing from the API response (truncated?)");
+    }
+    for (filename, file) in &gist.files {
+        let content = file.content.as_deref().unwrap_or_default();
+        let is_skill_md = filename == "SKILL.md";
+        if is_skill_md || content.starts_with("---") {
+            match parse_frontmatter(content) {
+                Ok(parsed) => {
+                    if !is_safe_skill_name(&parsed.metadata.name) {
+                        bail!(
+                            "'{}' declares an unsafe skill name '{}'",
+                            filename,
+                            parsed.metadata.name
+                        );
+                    }
+                }
+                Err(e) => bail!(
+                    "'{}' looks like a skill file but its frontmatter does not parse: {}",
+                    filename,
+                    e
+                ),
+            }
+        }
     }
     Ok(discover_skills_from_gist(gist)
         .into_iter()
@@ -268,7 +297,8 @@ fn check_source(db: &Database, source: &Source) -> Result<UpstreamSkills> {
             // timestamp only tells us content changed, never that skills were
             // removed.
             let gist = fetch_gist(gist_id).with_context(|| format!("Failed to fetch gist {}", gist_id))?;
-            Ok(UpstreamSkills::Names(gist_skill_names(gist_id, &gist)?))
+            let names = gist_skill_names(&gist).with_context(|| format!("gist {} could not be verified", gist_id))?;
+            Ok(UpstreamSkills::Names(names))
         }
 
         Source::Git(tap_name) => {
@@ -277,22 +307,10 @@ fn check_source(db: &Database, source: &Source) -> Result<UpstreamSkills> {
                 .get(tap_name)
                 .with_context(|| format!("Tap '{}' not found", tap_name))?;
 
-            let taps_dir = get_taps_clone_dir()?;
-            let clone_dir = tap_clone_path(&taps_dir, tap_name);
-
-            // Refresh the configured branch once per tap, cloning if there is
-            // no local copy yet — mirroring `tap update`.
-            if !clone_dir.exists() {
-                if let Some(parent) = clone_dir.parent() {
-                    std::fs::create_dir_all(parent)
-                        .with_context(|| format!("Failed to create {}", parent.display()))?;
-                }
-                git_clone(&tap.url, &clone_dir, tap.branch.as_deref())
-                    .with_context(|| format!("Failed to clone {}", tap.url))?;
-            } else {
-                pull_or_reclone(&clone_dir, &tap.url, tap.branch.as_deref())
-                    .with_context(|| format!("Failed to pull updates for {}", tap_name))?;
-            }
+            // Refresh the configured branch once per tap — same refresh step
+            // the update flows use, but without their bail-on-empty scan, so
+            // a tap that legitimately has zero skills stays verifiable.
+            let clone_dir = ensure_fresh_clone(tap_name, tap)?;
 
             // A complete scan with no skills is a valid empty source; an
             // interrupted scan returns Err and keeps every installed skill.
@@ -738,50 +756,101 @@ mod tests {
         );
     }
 
-    /// Gist files the API returned without content are unverifiable: keep the
-    /// skills and fail the run instead of trusting a truncated response.
+    /// Gist ambiguity signals keep the gist unverifiable: content the API did
+    /// not return, a SKILL.md that fails to parse, a frontmatter-shaped file
+    /// that fails to parse, or an unsafe name. A plain README is ordinary
+    /// gist content and does not block verification.
     #[test]
-    fn test_gist_skill_names_rejects_missing_content() {
+    fn test_gist_skill_names_rejects_ambiguity() {
         use crate::registry::github::{GistFile, GistOwner, GistResponse};
+        use std::collections::HashMap;
 
-        let make_gist = |content: Option<&str>| GistResponse {
+        let make_gist = |files: &[(&str, Option<&str>)]| GistResponse {
             id: "abc123".to_string(),
             owner: GistOwner {
                 login: "someone".to_string(),
             },
             updated_at: "2026-01-01T00:00:00Z".to_string(),
-            files: [(
-                "SKILL.md".to_string(),
-                GistFile {
-                    filename: "SKILL.md".to_string(),
-                    content: content.map(|c| c.to_string()),
-                },
-            )]
-            .into_iter()
-            .collect(),
+            files: files
+                .iter()
+                .map(|(name, content)| {
+                    (
+                        name.to_string(),
+                        GistFile {
+                            filename: name.to_string(),
+                            content: content.map(|c| c.to_string()),
+                        },
+                    )
+                })
+                .collect::<HashMap<_, _>>(),
         };
 
-        let ok = "---\nname: gist-skill\ndescription: fine\n---\nbody";
-        let names = gist_skill_names("abc123", &make_gist(Some(ok))).expect("complete gist should verify");
+        let valid = "---\nname: gist-skill\ndescription: fine\n---\nbody";
+
+        // Complete gist verifies and yields the discovered name.
+        let names = gist_skill_names(&make_gist(&[("SKILL.md", Some(valid))])).expect("complete gist should verify");
         assert!(names.contains("gist-skill"));
 
-        let result = gist_skill_names("abc123", &make_gist(None));
-        assert!(result.is_err(), "truncated gist content must not verify names");
+        // A README without frontmatter is ordinary content, not ambiguity.
+        let names = gist_skill_names(&make_gist(&[
+            ("SKILL.md", Some(valid)),
+            ("README.md", Some("# hello\n")),
+        ]))
+        .expect("a plain README must not block verification");
+        assert!(names.contains("gist-skill"));
+
+        // Content the API did not return.
+        assert!(
+            gist_skill_names(&make_gist(&[("SKILL.md", None)])).is_err(),
+            "missing gist content must not verify names"
+        );
+
+        // A SKILL.md whose frontmatter does not parse is ambiguous.
+        assert!(
+            gist_skill_names(&make_gist(&[("SKILL.md", Some("broken file"))])).is_err(),
+            "unparseable SKILL.md must not verify names"
+        );
+
+        // Any frontmatter-shaped file that fails to parse is ambiguous.
+        assert!(
+            gist_skill_names(&make_gist(&[
+                ("SKILL.md", Some(valid)),
+                ("notes.md", Some("---\nbroken"))
+            ]))
+            .is_err(),
+            "unparseable frontmatter-shaped file must not verify names"
+        );
+
+        // An unsafe skill name in SKILL.md is ambiguous.
+        assert!(
+            gist_skill_names(&make_gist(&[(
+                "SKILL.md",
+                Some("---\nname: ../evil\ndescription: x\n---\n")
+            )]))
+            .is_err(),
+            "unsafe skill name must not verify names"
+        );
     }
 
     /// An interrupted scan — a SKILL.md that cannot be read mid-walk — must
-    /// return Err, never a silently-truncated Ok. This is what stops prune
-    /// (and `update --prune`) from deleting a skill it merely failed to see.
+    /// return Err, never a silently-truncated Ok. The readable sibling skill
+    /// makes the regression real: the pre-refactor code silently skipped the
+    /// unreadable file and returned Ok containing only the sibling.
     #[test]
     #[cfg(unix)]
     fn test_walk_local_skills_fails_on_unreadable_skill_md() {
         use std::os::unix::fs::PermissionsExt;
         use tempfile::TempDir;
         let temp = TempDir::new().unwrap();
-        let skill_dir = temp.path().join("skills/alpha");
-        fs::create_dir_all(&skill_dir).unwrap();
-        let skill_md = skill_dir.join("SKILL.md");
-        fs::write(&skill_md, "---\nname: alpha\ndescription: x\n---\n").unwrap();
+        for (skill, body) in [
+            ("alpha", "---\nname: alpha\ndescription: x\n---\n"),
+            ("beta", "---\nname: beta\ndescription: y\n---\n"),
+        ] {
+            let dir = temp.path().join("skills").join(skill);
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join("SKILL.md"), body).unwrap();
+        }
+        let skill_md = temp.path().join("skills/alpha/SKILL.md");
 
         let unreadable = fs::Permissions::from_mode(0o000);
         let readable = fs::Permissions::from_mode(0o644);

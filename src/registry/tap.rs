@@ -391,8 +391,9 @@ struct TapUpdateResult {
     current_skills: std::collections::HashSet<String>,
 }
 
-/// Refresh a Git tap before checking its current skill membership.
-pub(super) fn refresh_git_tap(name: &str, tap: &TapInfo) -> Result<(PathBuf, TapRegistry)> {
+/// Ensure a fresh clone of the tap exists at its configured branch, cloning
+/// if there is no local copy yet and pulling otherwise.
+pub(super) fn ensure_fresh_clone(name: &str, tap: &TapInfo) -> Result<PathBuf> {
     let clone_dir = get_tap_clone_dir(name)?;
     if clone_dir.try_exists()? {
         pull_or_reclone(&clone_dir, &tap.url, tap.branch.as_deref())
@@ -404,7 +405,12 @@ pub(super) fn refresh_git_tap(name: &str, tap: &TapInfo) -> Result<(PathBuf, Tap
         git_clone(&tap.url, &clone_dir, tap.branch.as_deref())
             .with_context(|| format!("Failed to clone {}", tap.url))?;
     }
+    Ok(clone_dir)
+}
 
+/// Refresh a Git tap before checking its current skill membership.
+pub(super) fn refresh_git_tap(name: &str, tap: &TapInfo) -> Result<(PathBuf, TapRegistry)> {
+    let clone_dir = ensure_fresh_clone(name, tap)?;
     let registry = discover_skills_from_local(&clone_dir, name).context("Failed to scan clone")?;
     Ok((clone_dir, registry))
 }
