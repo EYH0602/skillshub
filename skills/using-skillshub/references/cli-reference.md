@@ -49,11 +49,12 @@ skillshub agents                            # Show detected agents
 ## External Skills Management
 ```bash
 skillshub external list                     # List discovered external skills
-skillshub external scan                     # Scan for external skills
+skillshub external scan                     # Scan for global external skills
+skillshub external scan --project <DIR>     # Report project skills without changing global state
 skillshub external forget <name>            # Stop tracking an external skill
 ```
 
-External skills are skills found in agent directories that weren't installed via skillshub (e.g., from Claude marketplace or manual installation). They are automatically discovered during `skillshub link` and synced to all agents.
+Global discovery reads `~/.agents/skills` (including global installs from `npx skills`) and detected agent directories. `skillshub link` shares those skills without replacing existing entries or adding links for agents that already read the shared store. A project scan reports local skills without writing to the global database or creating links.
 
 ## Cleanup
 ```bash

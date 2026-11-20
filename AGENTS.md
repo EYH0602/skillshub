@@ -16,7 +16,6 @@ For architecture, CLI reference, supported agents, and skill/tap formats, see `d
 - Always write unit tests for new features.
 - Always test your code after implementation.
 - Use `pre-commit install --install-hooks` to enable local git hooks.
-- Do not commit or create pull requests — let the human do them. Suggest commit messages.
 
 ### Building
 

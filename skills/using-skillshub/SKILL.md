@@ -61,9 +61,9 @@ GitHub tap repo  ──git clone──▶  ~/.skillshub/taps/owner/repo/   (cach
   This is the canonical copy.
 - **Linked skills** are per-skill symlinks from each agent's skills directory
   back to the canonical copy. This is why one install fans out to every agent.
-- **External skills** are `SKILL.md` folders an agent already had (e.g. from a
-  marketplace). `skillshub link` discovers them and replicates them to the
-  other agents so everyone stays in sync.
+- **External skills** live in `~/.agents/skills` (including global installs
+  from `npx skills`) or in an agent's skills directory. `skillshub link` shares
+  them with detected agents that need a link.
 
 If the user reports "agent X doesn't see skill Y", check in this order:
 1. Is the skill installed? `skillshub list` — look for it.
@@ -203,9 +203,9 @@ Run `skillshub agents` to see which are present on the user's machine.
   star-list imports, which still hit the GitHub API.
 - **`git` is a hard runtime dependency.** If `skillshub doctor` reports a git
   problem, fix that first; nothing tap-related works without it.
-- **External skills are real.** When the user manually drops a skill into one
-  agent's directory, `skillshub link` will replicate it to every other agent.
-  This is intentional sync behaviour — flag it if it might surprise them.
+- **Project scans do not share skills.** `skillshub external scan --project .`
+  reports local skills without adding them to the global library or linking them.
+  Run `skillshub link` only when the user wants to share global external skills.
 
 ## Where to dig deeper
 

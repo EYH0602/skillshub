@@ -83,7 +83,7 @@ Local directory layout:
 - **Database**: `~/.skillshub/db.json` tracks installed skills, their versions, and external skills
 - **Installation**: Skills are copied from local tap clones to `~/.skillshub/skills/<owner>/<repo>/<skill>/`
 - **Linking**: Per-skill symlinks are created from agent skill directories
-- **External Skills**: Skills installed through other means (marketplace, manual) are discovered and synced
+- **External Skills**: Global skills from `~/.agents/skills` or detected agent directories can be shared. Project scans report local skills without tracking or linking them.
 
 ## Supported Agents
 

@@ -80,14 +80,13 @@ pub struct InstalledSkill {
 }
 
 /// Information about an externally-managed skill (not installed via skillshub)
-/// These are skills found in agent directories that are managed elsewhere
-/// (e.g., Claude marketplace, manual installation)
+/// Discovered in the shared .agents/skills store or an agent's skills directory.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExternalSkill {
     /// The skill name (directory name)
     pub name: String,
 
-    /// The agent that owns/manages this skill (e.g., ".claude")
+    /// The source agent or shared store label.
     pub source_agent: String,
 
     /// Full path to the skill directory
