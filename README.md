@@ -88,6 +88,10 @@ skillshub update                                    # Update all
 skillshub update EYH0602/skillshub/using-skillshub    # Update one
 skillshub update --prune                            # Also uninstall skills removed upstream
 
+# Remove skills that no longer exist upstream (preview with --dry-run)
+skillshub prune                                     # Check all installed skills
+skillshub prune owner/repo                          # Check only installs from this tap
+
 # Uninstall a skill
 skillshub uninstall EYH0602/skillshub/using-skillshub
 
@@ -136,6 +140,8 @@ skillshub tap remove vercel-labs/agent-skills --keep-skills
 ```
 
 If a skill disappears from its tap, a plain update leaves the installed copy and its links in place. Use `--prune` to uninstall it. Skillshub also tries to remove matching agent symlinks. See [Pruning Orphaned Skills](docs/prune-orphaned-skills.md#behavior).
+
+For cleanup without updating anything else, use `skillshub prune` (or `skillshub prune owner/repo`, preview with `--dry-run`): it checks each source that still has installed skills and uninstalls only skills the source confirms are gone. Sources it cannot verify keep their skills, and skills kept by `tap remove --keep-skills` are never touched. See [Prune Command](docs/prune-command.md).
 
 ### Import from GitHub Star Lists
 

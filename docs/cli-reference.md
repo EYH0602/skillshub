@@ -14,11 +14,15 @@ skillshub install <owner/repo/skill>        # Install a skill
 skillshub uninstall <owner/repo/skill>      # Remove installed skill
 skillshub update [owner/repo/skill]         # Update skill(s) to latest
 skillshub update --prune                     # Update all, uninstalling skills removed upstream
-skillshub info <owner/repo/skill>           # Show skill details
+skillshub prune [owner/repo]                 # Uninstall skills whose source no longer lists them
+skillshub prune owner/repo --dry-run         # Preview what prune would remove
+skillshub info <owner/repo/skill>            # Show skill details
 skillshub install-all                       # Install all from all added taps
 ```
 
 `update` keeps installed copies of skills that disappear upstream unless you pass `--prune`. Pruning removes the local install and tries to remove its matching agent symlinks, just like `uninstall`.
+
+`prune` only removes; it never updates or installs anything else. It checks each source that still has installed skills — refreshing the tap's clone or fetching the gist — and uninstalls a skill only when the source confirms it is gone. Sources it cannot verify (failed pull, fetch, or scan) keep their skills, skills from removed taps (`tap remove --keep-skills`) are always kept, and any failed check or removal makes the command exit nonzero. Use it when cleanup is the only goal; see [Pruning Orphaned Skills](prune-orphaned-skills.md#behavior) and [Prune Command](prune-command.md).
 
 ## Interactive TUI
 ```bash

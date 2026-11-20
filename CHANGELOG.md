@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `skillshub prune [owner/repo]` uninstalls installed skills their source no longer lists, without updating anything else. `--dry-run` previews the removals; unverifiable sources keep their skills and fail the run.
+
 ### Fixed
 
 - `skillshub update --prune` checks the upstream default tap instead of requiring a local bundle. A failed refresh keeps the installed copies.

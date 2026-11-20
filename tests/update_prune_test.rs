@@ -34,9 +34,8 @@ fn default_tap_prunes_only_after_checking_upstream() {
         fs::create_dir_all(dir).unwrap();
         fs::write(dir.join("SKILL.md"), "old copy").unwrap();
     }
-    let install_record = |skill: &str| {
-        json!({"tap": tap, "skill": skill, "commit": null, "installed_at": "2026-01-01T00:00:00Z"})
-    };
+    let install_record =
+        |skill: &str| json!({"tap": tap, "skill": skill, "commit": null, "installed_at": "2026-01-01T00:00:00Z"});
     let db = json!({
         "taps": {
             (tap): {
@@ -77,7 +76,10 @@ fn default_tap_prunes_only_after_checking_upstream() {
     assert!(current_doc.contains("current upstream copy"));
 
     let output = update(home, true);
-    assert!(output.contains(&format!("{obsolete} (pruned, no longer in tap)")), "{output}");
+    assert!(
+        output.contains(&format!("{obsolete} (pruned, no longer in tap)")),
+        "{output}"
+    );
     assert!(!obsolete_dir.exists());
     let final_db = read_db();
     let installed = final_db["installed"].as_object().unwrap();
