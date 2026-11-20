@@ -71,14 +71,14 @@ removes the orphan.
 
 ### Prune decision uses the freshly pulled clone (`skillshub update`)
 
-For Git taps other than the default, `get_tap_registry` reads the cache. A stale cache can still list a deleted skill or omit a skill that exists upstream. Check the fresh clone before deciding what to prune.
+A stale cache can list a deleted skill or omit a skill that still exists. `update` refreshes and scans each Git tap once per run, cloning it if needed, before it decides what to prune.
 
-For clone-backed taps, `update_skill` pulls the clone, scans it, and checks the installed name against the fresh scan. It uses the fresh path if the skill is still present. For the default tap, it uses the cached registry when available or the bundled registry otherwise. Gist installs are checked separately: the command fetches the gist, then checks for the skill if the gist's update timestamp changed.
+The default `EYH0602/skillshub` tap follows the same rule. A bundled copy can be installed offline, but the bundle and the cache do not decide which skills were removed upstream. If the refresh fails, `update` reports the error and keeps the installed copy. Gist installs are checked separately: the command fetches the gist, then checks for the skill if the gist's update timestamp changed.
 
 ## Key components
 
 - `remove_installed_skill_files()` (`src/registry/skill.rs`) removes the files, agent links, and database entry. Uninstall and prune share it.
-- `prune_or_report_missing()` (`src/registry/skill.rs`) handles a skill missing from the bundled or Git tap by pruning it or printing a notice.
+- `prune_or_report_missing()` (`src/registry/skill.rs`) handles a skill missing from a refreshed Git tap by pruning it or printing a notice.
 - `orphaned_installed_skills()` (`src/registry/tap.rs`) — membership-based orphan
   set for a tap.
 - `--prune` flags on `Commands::Update` and `TapCommands::Update` (`src/cli.rs`),
@@ -93,3 +93,4 @@ For clone-backed taps, `update_skill` pulls the clone, scans it, and checks the 
 - `src/registry/skill.rs`: `prune_or_report_missing` removes files + db entry
   when `prune = true` and leaves them when `prune = false`.
 - `src/registry/skill.rs`: uninstall removes the matching agent link and leaves unrelated links intact, including links to a same-named skill from another tap.
+- `tests/update_prune_test.rs`: default-tap updates ignore stale cache entries, keep installed copies when the source is unavailable, and prune confirmed removals only with `--prune`.

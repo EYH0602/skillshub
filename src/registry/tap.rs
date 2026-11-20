@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use colored::Colorize;
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tabled::{
     settings::{Padding, Style},
     Table, Tabled,
@@ -17,7 +17,7 @@ use super::github::{
 };
 use super::models::{Database, SkillEntry, SkillId, TapInfo, TapRegistry};
 use super::skill::remove_installed_skill_files;
-use crate::paths::{get_skills_install_dir, get_taps_clone_dir};
+use crate::paths::{get_skills_install_dir, get_tap_clone_dir, get_taps_clone_dir};
 use crate::skill::{parse_frontmatter, warn_invalid_frontmatter, warn_lenient_frontmatter};
 use crate::util::truncate_string;
 
@@ -366,7 +366,7 @@ pub fn update_tap(name: Option<&str>, prune: bool) -> Result<()> {
                 }
             }
             Err(e) => {
-                println!("\r  {} {} ({})", "✗".red(), tap_name, e);
+                println!("\r  {} {} ({:#})", "✗".red(), tap_name, e);
             }
         }
     }
@@ -391,6 +391,24 @@ struct TapUpdateResult {
     current_skills: std::collections::HashSet<String>,
 }
 
+/// Refresh a Git tap before checking its current skill membership.
+pub(super) fn refresh_git_tap(name: &str, tap: &TapInfo) -> Result<(PathBuf, TapRegistry)> {
+    let clone_dir = get_tap_clone_dir(name)?;
+    if clone_dir.try_exists()? {
+        pull_or_reclone(&clone_dir, &tap.url, tap.branch.as_deref())
+            .with_context(|| format!("Failed to pull updates for {}", name))?;
+    } else {
+        if let Some(parent) = clone_dir.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        git_clone(&tap.url, &clone_dir, tap.branch.as_deref())
+            .with_context(|| format!("Failed to clone {}", tap.url))?;
+    }
+
+    let registry = discover_skills_from_local(&clone_dir, name).context("Failed to scan clone")?;
+    Ok((clone_dir, registry))
+}
+
 /// Update a single tap, refresh cache, and return what changed
 fn update_single_tap(db: &mut Database, name: &str, tap: &TapInfo) -> Result<TapUpdateResult> {
     // For gist taps, use API-based discovery (no local clone)
@@ -398,22 +416,7 @@ fn update_single_tap(db: &mut Database, name: &str, tap: &TapInfo) -> Result<Tap
         let github_url = parse_github_url(&tap.url)?;
         discover_skills_from_repo(&github_url, name)?
     } else {
-        let taps_dir = get_taps_clone_dir()?;
-        let clone_dir = tap_clone_path(&taps_dir, name);
-
-        // Clone if the local copy doesn't exist yet (legacy tap or first update)
-        if !clone_dir.exists() {
-            if let Some(parent) = clone_dir.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            git_clone(&tap.url, &clone_dir, tap.branch.as_deref())
-                .with_context(|| format!("Failed to clone {}", tap.url))?;
-        } else {
-            pull_or_reclone(&clone_dir, &tap.url, tap.branch.as_deref())
-                .with_context(|| format!("Failed to pull updates for {}", name))?;
-        }
-
-        discover_skills_from_local(&clone_dir, name)?
+        refresh_git_tap(name, tap)?.1
     };
 
     // Compare old vs new registries to detect changes
