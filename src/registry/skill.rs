@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
@@ -9,12 +10,12 @@ use tabled::{
 };
 
 use super::db::{self, DEFAULT_TAP_NAME};
-use super::git::{ensure_clone, git_head_sha, tap_clone_path};
+use super::git::{ensure_clone, git_head_sha};
 use super::github::{discover_skills_from_gist, fetch_gist, is_gist_url, parse_gist_url, parse_github_url};
 use super::models::{Database, InstalledSkill, SkillId};
-use super::tap::get_tap_registry;
+use super::tap::{get_tap_registry, refresh_git_tap};
 use crate::commands::link_to_agents;
-use crate::paths::{get_embedded_skills_dir, get_skills_install_dir, get_tap_clone_dir, get_taps_clone_dir};
+use crate::paths::{get_embedded_skills_dir, get_skills_install_dir, get_tap_clone_dir};
 use crate::skill::{discover_skills, has_references_dir, has_scripts_dir, parse_skill_metadata};
 use crate::util::{copy_dir_contents, truncate_string};
 
@@ -401,9 +402,13 @@ fn install_from_clone(
     dest: &std::path::Path,
     branch: Option<&str>,
 ) -> Result<Option<String>> {
-    let clone_dir = crate::paths::get_tap_clone_dir(tap_name)?;
-    super::git::ensure_clone(&clone_dir, tap_url, branch)?;
+    let clone_dir = get_tap_clone_dir(tap_name)?;
+    ensure_clone(&clone_dir, tap_url, branch)?;
+    copy_skill_from_clone(&clone_dir, skill_path, dest)?;
+    Ok(git_head_sha(&clone_dir).ok())
+}
 
+fn copy_skill_from_clone(clone_dir: &Path, skill_path: &str, dest: &Path) -> Result<()> {
     let source = clone_dir.join(skill_path);
 
     // Path containment check
@@ -429,8 +434,7 @@ fn install_from_clone(
         return Err(e.context("Failed to copy skill from clone"));
     }
 
-    let commit = super::git::git_head_sha(&clone_dir).ok();
-    Ok(commit)
+    Ok(())
 }
 
 /// Uninstall a skill by full name
@@ -569,9 +573,7 @@ fn remove_agent_symlinks_in(agent_skill_dirs: &[PathBuf], link_name: &str, expec
     }
 }
 
-/// Handle a skill that no longer exists upstream: prune it (when `prune`) or
-/// print a notice. Shared by the update flow's cache-miss (default/gist taps)
-/// and fresh-clone-miss (clone-backed taps) paths so both behave identically.
+/// Report a skill missing from a freshly checked tap or uninstall it if requested.
 fn prune_or_report_missing(
     db: &mut Database,
     install_dir: &Path,
@@ -650,9 +652,8 @@ pub fn update_skill(selection: UpdateSelection, prune: bool) -> Result<()> {
     );
 
     let mut updated_count = 0;
-    // Taps already pulled this run: several skills can share one tap clone,
-    // and pulling it once per skill would repeat the same fetch.
-    let mut pulled_taps: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // Each Git tap is refreshed and scanned at most once, even if the refresh fails.
+    let mut git_sources = HashMap::new();
 
     for skill_name in skills_to_update {
         let installed = db.installed.get(&skill_name).unwrap().clone();
@@ -713,126 +714,52 @@ pub fn update_skill(selection: UpdateSelection, prune: bool) -> Result<()> {
         }
 
         let tap = match db::get_tap(&db, &installed.tap) {
-            Some(t) => t.clone(),
+            Some(t) => t,
             None => {
                 println!("  {} {} (tap not found)", "✗".red(), skill_name);
                 continue;
             }
         };
 
-        let registry = match get_tap_registry(&db, &installed.tap) {
-            Ok(Some(r)) => r,
-            Ok(None) => {
-                println!(
-                    "  {} {} (no cached registry, run 'skillshub tap update')",
-                    "✗".red(),
-                    skill_name
-                );
-                continue;
-            }
-            Err(e) => {
-                println!("  {} {} ({})", "✗".red(), skill_name, e);
-                continue;
-            }
-        };
-
-        let is_default_tap = tap.is_default || installed.tap == DEFAULT_TAP_NAME;
-        let is_gist_tap = is_gist_url(&tap.url);
-        let dest = install_dir.join(&installed.tap).join(&installed.skill);
-
-        // The default (bundled) tap and gist taps carry an authoritative cached
-        // registry here, so a cache miss is a real "removed upstream" signal and
-        // we decide prune/skip immediately. Clone-backed taps (non-default,
-        // non-gist) may have a stale cache, so their membership is decided
-        // against the freshly pulled clone below — never from the cache.
-        if (is_default_tap || is_gist_tap) && !registry.skills.contains_key(&installed.skill) {
-            prune_or_report_missing(&mut db, &install_dir, &installed, &skill_name, prune);
-            continue;
-        }
-
-        // For default tap skills installed locally (commit=None), refresh from local bundled dir.
-        // These are never compared by commit SHA, so always attempt a local-first refresh.
-        if is_default_tap && installed.commit.is_none() {
-            match install_from_local(&installed.skill, &dest) {
-                Ok(()) => {
-                    println!("  {} {} (bundled, refreshed)", "✓".green(), skill_name);
-                    updated_count += 1;
-                }
-                Err(e) => {
-                    println!("  {} {} ({})", "✗".red(), skill_name, e);
-                }
-            }
-            continue;
-        }
-
-        // Gist taps without gist_updated_at shouldn't reach here, but guard anyway
-        if is_gist_tap {
+        // Gist installs must be checked against their source, not the tap cache.
+        if is_gist_url(&tap.url) {
             println!("  {} {} (unexpected state for gist skill)", "✗".red(), skill_name);
             continue;
         }
 
-        let taps_dir = get_taps_clone_dir()?;
-        let clone_dir = tap_clone_path(&taps_dir, &installed.tap);
-
-        if !clone_dir.exists() {
-            println!(
-                "  {} {} (No local clone for tap '{}'. Run 'skillshub tap update' to create one.)",
-                "✗".red(),
-                skill_name,
-                installed.tap
-            );
-            continue;
-        }
-
-        // Pull latest using resilient pull_or_reclone (once per tap per run).
-        // Mark the tap pulled only on success, so a failed pull is retried
-        // for the next skill of the same tap.
-        if !pulled_taps.contains(&installed.tap) {
-            if let Err(e) = super::git::pull_or_reclone(&clone_dir, &tap.url, tap.branch.as_deref()) {
-                println!("  {} {} (pull failed: {})", "✗".red(), skill_name, e);
-                continue;
-            }
-            pulled_taps.insert(installed.tap.clone());
-        }
-
-        // Re-discover skills from the freshly pulled clone — the authoritative
-        // upstream state. Deciding membership here (rather than from the possibly
-        // stale cache) is what lets `update --prune` honor its promise to remove
-        // skills actually removed upstream, and avoids a cryptic copy error when
-        // the cached path no longer exists in the clone.
-        let fresh_registry = match super::tap::discover_skills_from_local(&clone_dir, &installed.tap) {
-            Ok(r) => r,
+        // Bundled skills can be installed without Git, but updates (including
+        // pruning) must verify the upstream tap, just like other Git installs.
+        let source = git_sources.entry(installed.tap.clone()).or_insert_with(|| {
+            let (clone_dir, registry) = refresh_git_tap(&installed.tap, tap)?;
+            let commit = git_head_sha(&clone_dir)?;
+            Ok::<_, anyhow::Error>((clone_dir, registry, commit))
+        });
+        let (clone_dir, registry, new_commit) = match source {
+            Ok(source) => source,
             Err(e) => {
-                println!("  {} {} (failed to scan clone: {})", "✗".red(), skill_name, e);
+                println!("  {} {} ({:#})", "✗".red(), skill_name, e);
                 continue;
             }
         };
-        let skill_path = match fresh_registry.skills.get(&installed.skill) {
-            Some(e) => e.path.clone(),
+        let skill_path = match registry.skills.get(&installed.skill) {
+            Some(e) => &e.path,
             None => {
                 prune_or_report_missing(&mut db, &install_dir, &installed, &skill_name, prune);
                 continue;
             }
         };
-        // Refresh the tap's cached registry so `list` and later runs reflect the
-        // freshly observed upstream state.
-        if let Some(t) = db.taps.get_mut(&installed.tap) {
-            t.cached_registry = Some(fresh_registry);
-        }
 
-        let new_commit = git_head_sha(&clone_dir).unwrap_or_default();
-
-        if installed.commit.as_deref() == Some(&new_commit) {
+        if installed.commit.as_ref() == Some(new_commit) {
             println!("  {} {} (up to date)", "✓".green(), skill_name);
             continue;
         }
 
-        // Copy updated files from clone
-        match install_from_clone(&installed.tap, &tap.url, &skill_path, &dest, tap.branch.as_deref()) {
-            Ok(commit) => {
+        let dest = install_dir.join(&installed.tap).join(&installed.skill);
+        match copy_skill_from_clone(clone_dir, skill_path, &dest) {
+            Ok(()) => {
                 let old_commit = installed.commit.as_deref().unwrap_or("unknown");
                 if let Some(skill) = db.installed.get_mut(&skill_name) {
-                    skill.commit = commit;
+                    skill.commit = Some(new_commit.clone());
                     skill.installed_at = Utc::now();
                 }
                 println!("  {} {} ({} -> {})", "✓".green(), skill_name, old_commit, new_commit);
@@ -841,6 +768,12 @@ pub fn update_skill(selection: UpdateSelection, prune: bool) -> Result<()> {
             Err(e) => {
                 println!("  {} {} ({})", "✗".red(), skill_name, e);
             }
+        }
+    }
+
+    for (name, source) in git_sources {
+        if let Ok((_, registry, _)) = source {
+            db.taps.get_mut(&name).unwrap().cached_registry = Some(registry);
         }
     }
 

@@ -17,8 +17,8 @@ use commands::{
 };
 use registry::{
     add_skill_from_url, add_tap, import_star_list, install_all, install_all_from_tap, install_skill, list_skills,
-    list_taps, migrate_old_installations, needs_migration, remove_tap, search_skills, show_skill_info, uninstall_skill,
-    update_skill, update_tap, UpdateSelection,
+    list_taps, migrate_old_installations, needs_migration, prune_skills, remove_tap, search_skills, show_skill_info,
+    uninstall_skill, update_skill, update_tap, UpdateSelection,
 };
 
 fn main() -> Result<()> {
@@ -41,6 +41,7 @@ fn main() -> Result<()> {
             },
             prune,
         )?,
+        Commands::Prune { name, dry_run } => prune_skills(name.as_deref(), dry_run)?,
         Commands::List => list_skills()?,
         Commands::Search { query } => search_skills(&query)?,
         Commands::Info { name } => show_skill_info(&name)?,

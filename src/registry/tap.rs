@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use colored::Colorize;
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tabled::{
     settings::{Padding, Style},
     Table, Tabled,
@@ -17,7 +17,7 @@ use super::github::{
 };
 use super::models::{Database, SkillEntry, SkillId, TapInfo, TapRegistry};
 use super::skill::remove_installed_skill_files;
-use crate::paths::{get_skills_install_dir, get_taps_clone_dir};
+use crate::paths::{get_skills_install_dir, get_tap_clone_dir, get_taps_clone_dir};
 use crate::skill::{parse_frontmatter, warn_invalid_frontmatter, warn_lenient_frontmatter};
 use crate::util::truncate_string;
 
@@ -366,7 +366,7 @@ pub fn update_tap(name: Option<&str>, prune: bool) -> Result<()> {
                 }
             }
             Err(e) => {
-                println!("\r  {} {} ({})", "✗".red(), tap_name, e);
+                println!("\r  {} {} ({:#})", "✗".red(), tap_name, e);
             }
         }
     }
@@ -391,6 +391,30 @@ struct TapUpdateResult {
     current_skills: std::collections::HashSet<String>,
 }
 
+/// Ensure a fresh clone of the tap exists at its configured branch, cloning
+/// if there is no local copy yet and pulling otherwise.
+pub(super) fn ensure_fresh_clone(name: &str, tap: &TapInfo) -> Result<PathBuf> {
+    let clone_dir = get_tap_clone_dir(name)?;
+    if clone_dir.try_exists()? {
+        pull_or_reclone(&clone_dir, &tap.url, tap.branch.as_deref())
+            .with_context(|| format!("Failed to pull updates for {}", name))?;
+    } else {
+        if let Some(parent) = clone_dir.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        git_clone(&tap.url, &clone_dir, tap.branch.as_deref())
+            .with_context(|| format!("Failed to clone {}", tap.url))?;
+    }
+    Ok(clone_dir)
+}
+
+/// Refresh a Git tap before checking its current skill membership.
+pub(super) fn refresh_git_tap(name: &str, tap: &TapInfo) -> Result<(PathBuf, TapRegistry)> {
+    let clone_dir = ensure_fresh_clone(name, tap)?;
+    let registry = discover_skills_from_local(&clone_dir, name).context("Failed to scan clone")?;
+    Ok((clone_dir, registry))
+}
+
 /// Update a single tap, refresh cache, and return what changed
 fn update_single_tap(db: &mut Database, name: &str, tap: &TapInfo) -> Result<TapUpdateResult> {
     // For gist taps, use API-based discovery (no local clone)
@@ -398,22 +422,7 @@ fn update_single_tap(db: &mut Database, name: &str, tap: &TapInfo) -> Result<Tap
         let github_url = parse_github_url(&tap.url)?;
         discover_skills_from_repo(&github_url, name)?
     } else {
-        let taps_dir = get_taps_clone_dir()?;
-        let clone_dir = tap_clone_path(&taps_dir, name);
-
-        // Clone if the local copy doesn't exist yet (legacy tap or first update)
-        if !clone_dir.exists() {
-            if let Some(parent) = clone_dir.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            git_clone(&tap.url, &clone_dir, tap.branch.as_deref())
-                .with_context(|| format!("Failed to clone {}", tap.url))?;
-        } else {
-            pull_or_reclone(&clone_dir, &tap.url, tap.branch.as_deref())
-                .with_context(|| format!("Failed to pull updates for {}", name))?;
-        }
-
-        discover_skills_from_local(&clone_dir, name)?
+        refresh_git_tap(name, tap)?.1
     };
 
     // Compare old vs new registries to detect changes
@@ -613,7 +622,35 @@ pub fn import_star_list(url: &str, install: bool) -> Result<()> {
 }
 
 /// Discover skills by walking a local clone directory for SKILL.md files.
+///
+/// A walk that completes but finds no valid skills is an error here: update
+/// flows treat any registry as authoritative upstream state, and silently
+/// accepting an empty registry would let them prune every installed skill of
+/// the tap. Use [`walk_local_skills`] when an empty result is meaningful
+/// (e.g. the prune command distinguishes a confirmed empty tap from an
+/// interrupted scan).
 pub(crate) fn discover_skills_from_local(clone_dir: &Path, tap_name: &str) -> Result<TapRegistry> {
+    let skills = walk_local_skills(clone_dir)?;
+
+    if skills.is_empty() {
+        anyhow::bail!("No skills found in local clone (no valid SKILL.md files detected)");
+    }
+
+    Ok(TapRegistry {
+        name: tap_name.to_string(),
+        description: Some(format!("Skills from {}", tap_name)),
+        skills,
+    })
+}
+
+/// Walk a local tap clone and collect skill entries from valid SKILL.md files.
+///
+/// `Ok(map)` means the walk completed; an empty map is therefore a confirmed
+/// empty source (the tap genuinely has no skills right now). `Err` means the
+/// scan was interrupted — a directory could not be read mid-walk or a
+/// SKILL.md file could not be read — so absence of a skill name proves
+/// nothing and must not authorize deletions.
+pub(super) fn walk_local_skills(clone_dir: &Path) -> Result<HashMap<String, SkillEntry>> {
     let mut skills = HashMap::new();
     let skip_dirs = [
         ".git",
@@ -627,82 +664,71 @@ pub(crate) fn discover_skills_from_local(clone_dir: &Path, tap_name: &str) -> Re
         "benchmark",
     ];
 
-    for entry in WalkDir::new(clone_dir)
-        .into_iter()
-        .filter_entry(|e| {
-            // Never skip the root directory itself (depth 0)
-            if e.depth() == 0 {
-                return true;
-            }
-            let name = e.file_name().to_string_lossy();
-            !(e.file_type().is_dir() && (name.starts_with('.') || skip_dirs.contains(&name.as_ref())))
-        })
-        .filter_map(|e| e.ok())
-    {
+    for entry in WalkDir::new(clone_dir).into_iter().filter_entry(|e| {
+        // Never skip the root directory itself (depth 0)
+        if e.depth() == 0 {
+            return true;
+        }
+        let name = e.file_name().to_string_lossy();
+        !(e.file_type().is_dir() && (name.starts_with('.') || skip_dirs.contains(&name.as_ref())))
+    }) {
+        let entry = entry.with_context(|| format!("Failed to scan {}", clone_dir.display()))?;
         if entry.file_name() == "SKILL.md" && entry.file_type().is_file() {
-            if let Ok(content) = std::fs::read_to_string(entry.path()) {
-                let rel_path = entry.path().strip_prefix(clone_dir).unwrap_or(entry.path());
-                match parse_frontmatter(&content) {
-                    Ok(parsed) => {
-                        let name = parsed.metadata.name;
-                        let description = parsed.metadata.description;
+            let content = std::fs::read_to_string(entry.path())
+                .with_context(|| format!("Failed to read {}", entry.path().display()))?;
+            let rel_path = entry.path().strip_prefix(clone_dir).unwrap_or(entry.path());
+            match parse_frontmatter(&content) {
+                Ok(parsed) => {
+                    let name = parsed.metadata.name;
+                    let description = parsed.metadata.description;
 
-                        // Reject names with path traversal sequences
-                        if !is_safe_skill_name(&name) {
-                            eprintln!(
-                                "  {} Skipping {}: unsafe skill name '{}'",
-                                "!".yellow(),
-                                rel_path.display(),
-                                name
-                            );
-                            continue;
-                        }
-
-                        if let Some(reason) = &parsed.lenient_reason {
-                            warn_lenient_frontmatter(&rel_path.display().to_string(), reason);
-                        }
-
-                        let skill_path = entry
-                            .path()
-                            .parent()
-                            .and_then(|p| p.strip_prefix(clone_dir).ok())
-                            .map(|p| p.to_string_lossy().to_string())
-                            .unwrap_or_default();
-
-                        // Warn on duplicate skill names
-                        if skills.contains_key(&name) {
-                            eprintln!(
-                                "  {} Duplicate skill name '{}' at {}, keeping first occurrence",
-                                "!".yellow(),
-                                name,
-                                skill_path
-                            );
-                        } else {
-                            skills.insert(
-                                name.clone(),
-                                SkillEntry {
-                                    path: skill_path,
-                                    description,
-                                    homepage: None,
-                                },
-                            );
-                        }
+                    // Reject names with path traversal sequences
+                    if !is_safe_skill_name(&name) {
+                        eprintln!(
+                            "  {} Skipping {}: unsafe skill name '{}'",
+                            "!".yellow(),
+                            rel_path.display(),
+                            name
+                        );
+                        continue;
                     }
-                    Err(err) => warn_invalid_frontmatter(&rel_path.display().to_string(), &err),
+
+                    if let Some(reason) = &parsed.lenient_reason {
+                        warn_lenient_frontmatter(&rel_path.display().to_string(), reason);
+                    }
+
+                    let skill_path = entry
+                        .path()
+                        .parent()
+                        .and_then(|p| p.strip_prefix(clone_dir).ok())
+                        .map(|p| p.to_string_lossy().to_string())
+                        .unwrap_or_default();
+
+                    // Warn on duplicate skill names
+                    if skills.contains_key(&name) {
+                        eprintln!(
+                            "  {} Duplicate skill name '{}' at {}, keeping first occurrence",
+                            "!".yellow(),
+                            name,
+                            skill_path
+                        );
+                    } else {
+                        skills.insert(
+                            name.clone(),
+                            SkillEntry {
+                                path: skill_path,
+                                description,
+                                homepage: None,
+                            },
+                        );
+                    }
                 }
+                Err(err) => warn_invalid_frontmatter(&rel_path.display().to_string(), &err),
             }
         }
     }
 
-    if skills.is_empty() {
-        anyhow::bail!("No skills found in local clone (no valid SKILL.md files detected)");
-    }
-
-    Ok(TapRegistry {
-        name: tap_name.to_string(),
-        description: Some(format!("Skills from {}", tap_name)),
-        skills,
-    })
+    Ok(skills)
 }
 
 #[cfg(test)]

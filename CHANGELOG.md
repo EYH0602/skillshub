@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.1] - 2026-11-20
+
+### Added
+
+- `skillshub prune [owner/repo]` uninstalls installed skills their source no longer lists, without updating anything else. `--dry-run` previews the removals; unverifiable sources keep their skills and fail the run.
+
+### Fixed
+
+- `skillshub update --prune` checks the upstream default tap instead of requiring a local bundle. A failed refresh keeps the installed copies.
+
+### Security
+
+- Update `openssl`, `rustls`, and `rustls-webpki` in the lockfile, clearing 13 published advisories affecting the bundled binaries.
+
 ## [1.4.0] - 2026-10-03
 
 ### Added

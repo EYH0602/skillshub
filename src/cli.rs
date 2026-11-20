@@ -43,6 +43,16 @@ pub enum Commands {
         prune: bool,
     },
 
+    /// Uninstall installed skills that no longer exist upstream
+    Prune {
+        /// Only check installs from this tap (e.g., owner/repo)
+        name: Option<String>,
+
+        /// Show what would be removed without uninstalling anything
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// List all available skills
     List,
 

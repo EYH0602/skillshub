@@ -36,6 +36,8 @@ cargo run -- list
 cargo run -- install EYH0602/skillshub/using-skillshub
 cargo run -- update --prune
 cargo run -- tap update --prune
+cargo run -- prune
+cargo run -- prune owner/repo --dry-run
 cargo run -- link
 cargo run -- agents
 cargo run -- external list

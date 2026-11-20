@@ -26,23 +26,16 @@ that no longer exist upstream", not "follow a rename".
 
 ## Behavior
 
-An opt-in `--prune` flag is available on **both** update commands. Default
-behavior (no flag) is unchanged — detect and warn only — so the change is
-non-destructive unless the user asks for it.
+Both update commands accept `--prune`. Without it, they report missing skills and leave the installed copies and agent links in place.
 
-- `skillshub tap update --prune` — for each tap, after refreshing the registry,
-  uninstall every installed skill that is absent from the fresh registry, then
-  print what was pruned. Without `--prune`, the same orphans are listed with the
-  manual `skillshub uninstall` hint.
-- `skillshub update --prune` — while updating installed skills, uninstall any
-  skill whose source (tap clone or gist) no longer contains it. Without
-  `--prune`, it prints a "no longer in tap" notice and skips.
+- `skillshub tap update [owner/repo] --prune` refreshes the tap registry and uninstalls installed skills that are absent from it. Without `--prune`, it suggests uninstall commands. You can run it with `--prune` after a plain refresh.
+- `skillshub update [owner/repo/skill] --prune` updates installed skills and uninstalls ones it finds missing from their tap or gist. Without `--prune`, it reports the missing skill and skips it.
 
-Pruning removes the install directory and the `db.installed` entry, and cleans up
-a now-empty tap directory. Matching existing `uninstall` semantics, it does **not**
-remove dangling agent symlinks — that is left to the user / `skillshub clean
-links` (symlink option A; a unified fix for `uninstall` and `prune` is a possible
-follow-up).
+Pruning uses the same cleanup as `uninstall`: it removes the installed files and database entry, and deletes the tap's install directory if it is empty. It also tries to remove matching symlinks from detected agents. A link must point to that exact skill's install path; files and links to other targets are left alone. Link cleanup failures are reported as warnings.
+
+A failed refresh does not trigger pruning. This includes a Git tap scan that finds no valid `SKILL.md` files: the scan returns an error, so even `--prune` leaves the installed copies alone. If the tap has intentionally removed its last skill, use `skillshub uninstall <owner/repo/skill>` to remove the copy.
+
+`skillshub tap remove <owner/repo>` is different: it uninstalls all skills from the tap by default. Pass `--keep-skills` to keep the local copies.
 
 ## Design
 
@@ -78,25 +71,14 @@ removes the orphan.
 
 ### Prune decision uses the freshly pulled clone (`skillshub update`)
 
-`get_tap_registry` is cache-only. Deciding to prune from that cache is unsafe: a
-stale cache could miss a real upstream removal (leading to a cryptic "skill path
-not found in local clone" copy error) or prune a skill that still exists upstream.
+A stale cache can list a deleted skill or omit a skill that still exists. `update` refreshes and scans each Git tap once per run, cloning it if needed, before it decides what to prune.
 
-For clone-backed (non-default, non-gist) taps, `update_skill` now pulls the clone
-first and re-discovers its skills with `discover_skills_from_local`, then decides
-membership against that authoritative state — pruning when the skill is gone and
-using the fresh path otherwise. The default (bundled) tap and gist taps carry an
-authoritative registry at that point (gists are re-fetched fresh), so their prune
-decision is made directly from it. The shared `prune_or_report_missing` helper
-gives both paths identical prune-vs-report behavior.
+The default `EYH0602/skillshub` tap follows the same rule. A bundled copy can be installed offline, but the bundle and the cache do not decide which skills were removed upstream. If the refresh fails, `update` reports the error and keeps the installed copy. Gist installs are checked separately: the command fetches the gist, then checks for the skill if the gist's update timestamp changed.
 
 ## Key components
 
-- `remove_installed_skill_files()` (`src/registry/skill.rs`) — in-place file +
-  db-entry removal; the shared uninstall/prune primitive.
-- `prune_or_report_missing()` (`src/registry/skill.rs`) — prune (when the flag is
-  set) or print a "no longer in tap" notice; shared by the cache-miss and
-  fresh-clone-miss paths.
+- `remove_installed_skill_files()` (`src/registry/skill.rs`) removes the files, agent links, and database entry. Uninstall and prune share it.
+- `prune_or_report_missing()` (`src/registry/skill.rs`) handles a skill missing from a refreshed Git tap by pruning it or printing a notice.
 - `orphaned_installed_skills()` (`src/registry/tap.rs`) — membership-based orphan
   set for a tap.
 - `--prune` flags on `Commands::Update` and `TapCommands::Update` (`src/cli.rs`),
@@ -110,3 +92,5 @@ gives both paths identical prune-vs-report behavior.
   orphan while keeping siblings and cleaning an emptied tap dir.
 - `src/registry/skill.rs`: `prune_or_report_missing` removes files + db entry
   when `prune = true` and leaves them when `prune = false`.
+- `src/registry/skill.rs`: uninstall removes the matching agent link and leaves unrelated links intact, including links to a same-named skill from another tap.
+- `tests/update_prune_test.rs`: default-tap updates ignore stale cache entries, keep installed copies when the source is unavailable, and prune confirmed removals only with `--prune`.
