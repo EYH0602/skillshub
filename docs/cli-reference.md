@@ -18,6 +18,8 @@ skillshub info <owner/repo/skill>           # Show skill details
 skillshub install-all                       # Install all from all added taps
 ```
 
+`update` keeps installed copies of skills that disappear upstream unless you pass `--prune`. Pruning removes the local install and tries to remove its matching agent symlinks, just like `uninstall`.
+
 ## Interactive TUI
 ```bash
 skillshub tui                               # Interactive, tap-centric skill manager
@@ -57,6 +59,8 @@ skillshub tap update [owner/repo]           # Refresh tap registry
 skillshub tap update --prune                 # Refresh, uninstalling installed skills no longer in the tap
 skillshub tap install-all <owner/repo>      # Install all skills from a tap
 ```
+
+`tap update` refreshes the registry without changing installed copies by default. Pass `--prune` to uninstall skills missing from the refreshed registry. See [Pruning Orphaned Skills](prune-orphaned-skills.md#behavior) for what counts as a removal.
 
 ## Agent Management
 ```bash

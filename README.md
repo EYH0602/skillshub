@@ -135,6 +135,8 @@ skillshub tap remove vercel-labs/agent-skills
 skillshub tap remove vercel-labs/agent-skills --keep-skills
 ```
 
+If a skill disappears from its tap, a plain update leaves the installed copy and its links in place. Use `--prune` to uninstall it. Skillshub also tries to remove matching agent symlinks. See [Pruning Orphaned Skills](docs/prune-orphaned-skills.md#behavior).
+
 ### Import from GitHub Star Lists
 
 If you curate skills taps in a GitHub star list, you can import all of them at once:
