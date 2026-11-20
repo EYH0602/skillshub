@@ -1,14 +1,15 @@
 use anyhow::{Context, Result};
-use chrono::Utc;
 use colored::Colorize;
 use std::collections::HashSet;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use crate::agent::{discover_agents, known_agent_names, AgentInfo};
+use super::external::{
+    discover_external_skills, global_shared_skills_dir, is_current_shared_skill, SHARED_SKILLS_SOURCE,
+};
+use crate::agent::{discover_agents, known_agent_names};
 use crate::paths::get_skills_install_dir;
-use crate::registry::db::{add_external_skill, init_db, is_external_skill, save_db};
-use crate::registry::models::{Database, ExternalSkill};
+use crate::registry::db::{init_db, save_db};
 use crate::skill::{has_references_dir, has_scripts_dir, Skill};
 
 /// Link installed skills to all discovered coding agents
@@ -18,18 +19,9 @@ pub fn link_to_agents() -> Result<()> {
 
     let agents = discover_agents();
 
-    if agents.is_empty() {
-        println!(
-            "{} No coding agents found. Looked for: {}",
-            "Info:".cyan(),
-            known_agent_names()
-        );
-        return Ok(());
-    }
-
-    // Step 1: Discover external skills from agent directories
     let skills_dir_canonical = skills_dir.canonicalize().unwrap_or_else(|_| skills_dir.clone());
-    let (new_external, all_external) = discover_external_skills(&agents, &mut db, &skills_dir_canonical)?;
+    let shared_dir = global_shared_skills_dir();
+    let new_external = discover_external_skills(&agents, &mut db, shared_dir.as_deref())?;
 
     if !new_external.is_empty() {
         println!(
@@ -44,6 +36,25 @@ pub fn link_to_agents() -> Result<()> {
         }
         save_db(&db)?;
     }
+
+    if agents.is_empty() {
+        println!(
+            "{} No coding agents found. Looked for: {}",
+            "Info:".cyan(),
+            known_agent_names()
+        );
+        return Ok(());
+    }
+
+    // Validate shared-store sources once, not once per destination agent.
+    let external_skills: Vec<_> = db
+        .external
+        .values()
+        .filter(|skill| {
+            skill.source_agent != SHARED_SKILLS_SOURCE
+                || is_current_shared_skill(&skill.source_path, shared_dir.as_deref())
+        })
+        .collect();
 
     // Step 2: Collect skillshub-managed skills
     let skills = if skills_dir.exists() {
@@ -118,23 +129,26 @@ pub fn link_to_agents() -> Result<()> {
         }
 
         // Sync external skills to this agent (from their source agents)
-        for ext_skill in &all_external {
-            let skill_link_path = link_path.join(&ext_skill.name);
-
-            // Skip if this is the source agent (skill already exists there)
-            let current_agent_name = format!(".{}", agent_name.trim_start_matches('.'));
-            if ext_skill.source_agent == current_agent_name || ext_skill.source_agent == agent_name {
+        let reads_shared_skills = reads_global_shared_skills(agent_name);
+        for ext_skill in &external_skills {
+            if ext_skill.source_agent == agent_name
+                || (reads_shared_skills && ext_skill.source_agent == SHARED_SKILLS_SOURCE)
+            {
                 continue;
             }
 
-            // Skip if skill already exists (either as file/dir or symlink)
-            if skill_link_path.exists() {
-                if skill_link_path.is_symlink() {
-                    external_synced += 1;
-                } else {
-                    skipped_count += 1;
+            let skill_link_path = link_path.join(&ext_skill.name);
+            match fs::symlink_metadata(&skill_link_path) {
+                Ok(metadata) => {
+                    if metadata.file_type().is_symlink() {
+                        external_synced += 1;
+                    } else {
+                        skipped_count += 1;
+                    }
+                    continue;
                 }
-                continue;
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error).with_context(|| format!("Checking {}", skill_link_path.display())),
             }
 
             // Create symlink to the external skill's source
@@ -172,84 +186,13 @@ pub fn link_to_agents() -> Result<()> {
     Ok(())
 }
 
-/// Discover external skills from agent directories
-/// Returns (newly_discovered_names, all_external_skills)
-///
-/// External skills are real directories (not symlinks) in agent skill directories
-/// that weren't installed by skillshub. They are tracked and synced to other agents.
-fn discover_external_skills(
-    agents: &[AgentInfo],
-    db: &mut Database,
-    _skillshub_skills_dir: &Path,
-) -> Result<(Vec<String>, Vec<ExternalSkill>)> {
-    let mut new_external = Vec::new();
-    // Track which canonical paths we've seen to avoid duplicates
-    let mut seen_sources: HashSet<PathBuf> = HashSet::new();
-
-    // Collect names of skillshub-managed skills to exclude them
-    let managed_skill_names: HashSet<String> = db.installed.values().map(|s| s.skill.clone()).collect();
-
-    // Scan all agents for external skills
-    for agent in agents {
-        let agent_name = agent.name.to_string();
-        let skills_path = agent.path.join(agent.skills_subdir);
-
-        if !skills_path.exists() || !skills_path.is_dir() {
-            continue;
-        }
-
-        // Iterate through entries in the agent's skills directory
-        for entry in fs::read_dir(&skills_path)? {
-            let entry = entry?;
-            let path = entry.path();
-            let skill_name = entry.file_name().to_string_lossy().to_string();
-
-            // Skip if it's a skillshub-managed skill name
-            if managed_skill_names.contains(&skill_name) {
-                continue;
-            }
-
-            // Skip symlinks - we only track real directories as sources
-            // Symlinks are either skillshub-managed or created by us for syncing
-            if path.is_symlink() {
-                continue;
-            }
-
-            // Skip if not a directory
-            if !path.is_dir() {
-                continue;
-            }
-
-            // Get canonical path to detect duplicates
-            let source_path = path.canonicalize().unwrap_or_else(|_| path.clone());
-
-            // Skip if we've already seen this source path
-            if seen_sources.contains(&source_path) {
-                continue;
-            }
-            seen_sources.insert(source_path.clone());
-
-            // Skip if already tracked as external
-            if is_external_skill(db, &skill_name) {
-                continue;
-            }
-
-            let external = ExternalSkill {
-                name: skill_name.clone(),
-                source_agent: agent_name.clone(),
-                source_path,
-                discovered_at: Utc::now(),
-            };
-
-            add_external_skill(db, &skill_name, external);
-            new_external.push(skill_name.clone());
-        }
-    }
-
-    // Collect all external skills (including previously discovered ones)
-    let all_external: Vec<ExternalSkill> = db.external.values().cloned().collect();
-
-    Ok((new_external, all_external))
+fn reads_global_shared_skills(agent: &str) -> bool {
+    // Matches Vercel's readsCanonicalGlobally for agents Skillshub knows.
+    // Antigravity uses the shared store only within projects.
+    matches!(
+        agent,
+        ".cline" | ".codex" | ".copilot" | ".cursor" | ".gemini" | ".kimi" | ".opencode" | ".warp"
+    )
 }
 
 enum LinkOutcome {

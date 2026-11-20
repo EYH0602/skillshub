@@ -7,6 +7,8 @@ It provides a CLI to install, manage, and link reusable skills to various coding
 
 For architecture, CLI reference, supported agents, and skill/tap formats, see `docs/`.
 
+Global external discovery reads `~/.agents/skills` and agent directories. `external scan --project <DIR>` only reports project skills; it must not open or migrate the global database. See [External skill discovery](docs/external-skill-discovery.md).
+
 ## Development
 
 - Rust 2021 edition, MSRV 1.85 (bound by transitive deps, e.g. `clap_complete` and `unicode-segmentation` via `inquire`/`crossterm`)
@@ -17,7 +19,6 @@ For architecture, CLI reference, supported agents, and skill/tap formats, see `d
 - Always write unit tests for new features.
 - Always test your code after implementation.
 - Use `pre-commit install --install-hooks` to enable local git hooks.
-- Do not commit or create pull requests — let the human do them. Suggest commit messages.
 
 ### Building
 
@@ -42,6 +43,7 @@ cargo run -- link
 cargo run -- agents
 cargo run -- external list
 cargo run -- external scan
+cargo run -- external scan --project .
 cargo run -- doctor
 cargo run -- tui
 cargo run -- completions bash

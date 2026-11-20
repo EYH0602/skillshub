@@ -12,8 +12,8 @@ use clap_complete::{generate, Shell as ClapShell};
 
 use cli::{CleanCommands, Cli, Commands, ExternalCommands, Shell, TapCommands};
 use commands::{
-    clean_all, clean_cache, clean_links, external_forget, external_list, external_scan, link_to_agents, run_tui,
-    show_agents,
+    clean_all, clean_cache, clean_links, external_forget, external_list, external_scan, external_scan_project,
+    link_to_agents, run_tui, show_agents,
 };
 use registry::{
     add_skill_from_url, add_tap, import_star_list, install_all, install_all_from_tap, install_skill, list_skills,
@@ -23,6 +23,11 @@ use registry::{
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+
+    // Project discovery must not trigger a global database migration.
+    if let Commands::External(ExternalCommands::Scan { project: Some(project) }) = &cli.command {
+        return external_scan_project(project);
+    }
 
     // Auto-migrate old installations on first run (except for migrate command itself)
     if !matches!(cli.command, Commands::Migrate) && needs_migration()? {
@@ -56,7 +61,7 @@ fn main() -> Result<()> {
         },
         Commands::External(ext_cmd) => match ext_cmd {
             ExternalCommands::List => external_list()?,
-            ExternalCommands::Scan => external_scan()?,
+            ExternalCommands::Scan { .. } => external_scan()?,
             ExternalCommands::Forget { name } => external_forget(&name)?,
         },
         Commands::Clean(clean_cmd) => match clean_cmd {

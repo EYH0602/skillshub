@@ -171,20 +171,25 @@ skillshub agents
 
 ### External Skills Management
 
-Skillshub can discover and sync skills installed through other means (e.g., Claude marketplace, manual installation):
+Skillshub can discover skills already on disk, including global installs from `npx skills` in `~/.agents/skills` and skills placed directly in agent directories.
 
 ```bash
 # List discovered external skills
 skillshub external list
 
-# Scan agent directories for external skills
+# Scan for global external skills
 skillshub external scan
+
+# List project skills without adding them to the global library
+skillshub external scan --project .
 
 # Stop tracking an external skill (doesn't delete it)
 skillshub external forget my-skill
 ```
 
-When you run `skillshub link`, external skills are automatically discovered from all agent directories and synced to all other agents. If the same skill name exists in multiple agents, the first one found is used as the source.
+`skillshub link` also scans for global external skills and shares them with detected agents. It leaves existing entries alone and skips extra links for agents that already read `~/.agents/skills`. Existing tracked sources keep their names; a new skill in the shared store takes precedence over a same-name agent copy.
+
+Project scans only report local skills. They do not change global tracking or create links. Vercel still owns its installs, and `skillshub clean links` leaves links into its shared store alone. See [External skill discovery](docs/external-skill-discovery.md).
 
 ### Cleanup
 

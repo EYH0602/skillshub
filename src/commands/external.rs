@@ -1,7 +1,7 @@
-use anyhow::Result;
+use anyhow::{ensure, Context, Result};
 use chrono::Utc;
 use colored::Colorize;
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tabled::{
@@ -9,18 +9,19 @@ use tabled::{
     Table, Tabled,
 };
 
-use crate::agent::{discover_agents, AgentInfo};
-use crate::paths::get_skills_install_dir;
-use crate::registry::db::{
-    add_external_skill, get_all_external_skills, init_db, is_external_skill, remove_external_skill, save_db,
-};
+use crate::agent::{discover_agents, AgentInfo, KNOWN_AGENTS};
+use crate::paths::get_home_dir;
+use crate::registry::db::{get_all_external_skills, init_db, is_external_skill, remove_external_skill, save_db};
 use crate::registry::models::{Database, ExternalSkill};
+
+const SHARED_SKILLS_DIR: &str = ".agents/skills";
+pub(super) const SHARED_SKILLS_SOURCE: &str = "~/.agents/skills";
 
 #[derive(Tabled)]
 struct ExternalSkillRow {
     #[tabled(rename = "Name")]
     name: String,
-    #[tabled(rename = "Source Agent")]
+    #[tabled(rename = "Source")]
     source_agent: String,
     #[tabled(rename = "Source Path")]
     source_path: String,
@@ -65,32 +66,26 @@ pub fn external_list() -> Result<()> {
     Ok(())
 }
 
-/// Scan agent directories for external skills
+/// Scan the global shared store and agent directories for external skills.
 pub fn external_scan() -> Result<()> {
-    let skills_dir = get_skills_install_dir()?;
-    let skills_dir_canonical = skills_dir.canonicalize().unwrap_or_else(|_| skills_dir.clone());
     let mut db = init_db()?;
 
     let agents = discover_agents();
 
-    if agents.is_empty() {
-        println!("{} No coding agents found.", "Info:".cyan());
-        return Ok(());
-    }
-
+    let shared_dir = global_shared_skills_dir();
     println!(
-        "{} Scanning {} agent(s) for external skills...",
+        "{} Scanning the shared store and {} agent(s) for external skills...",
         "=>".green().bold(),
         agents.len()
     );
 
-    let (new_external, all_external) = discover_external_skills_internal(&agents, &mut db, &skills_dir_canonical)?;
+    let new_external = discover_external_skills(&agents, &mut db, shared_dir.as_deref())?;
 
     if new_external.is_empty() {
         println!(
             "{} No new external skills discovered. Total tracked: {}",
             "Info:".cyan(),
-            all_external.len()
+            db.external.len()
         );
     } else {
         println!(
@@ -107,7 +102,7 @@ pub fn external_scan() -> Result<()> {
         println!(
             "\n{} Total external skills tracked: {}",
             "Done!".green().bold(),
-            all_external.len()
+            db.external.len()
         );
     }
 
@@ -141,83 +136,121 @@ pub fn external_forget(name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Internal function to discover external skills (shared with link.rs logic)
-///
-/// External skills are real directories (not symlinks) in agent skill directories
-/// that weren't installed by skillshub. They are tracked and synced to other agents.
-fn discover_external_skills_internal(
-    agents: &[AgentInfo],
-    db: &mut Database,
-    _skillshub_skills_dir: &Path,
-) -> Result<(Vec<String>, Vec<ExternalSkill>)> {
-    let mut new_external = Vec::new();
-    // Track which canonical paths we've seen to avoid duplicates
-    let mut seen_sources: HashSet<PathBuf> = HashSet::new();
+/// Do not adopt a shared store redirected to another scope by a symlink.
+pub(super) fn global_shared_skills_dir() -> Option<PathBuf> {
+    let expected = get_home_dir()?.canonicalize().ok()?.join(SHARED_SKILLS_DIR);
+    let resolved = expected.canonicalize().ok()?;
+    (resolved == expected && resolved.is_dir()).then_some(resolved)
+}
 
-    // Collect names of skillshub-managed skills to exclude them
-    let managed_skill_names: HashSet<String> = db.installed.values().map(|s| s.skill.clone()).collect();
+fn has_skill_file(dir: &Path) -> bool {
+    fs::symlink_metadata(dir.join("SKILL.md")).is_ok_and(|metadata| metadata.is_file())
+}
 
-    // Scan all agents for external skills
-    for agent in agents {
-        let agent_name = agent.name.to_string();
-        let skills_path = agent.path.join(agent.skills_subdir);
+pub(super) fn is_current_shared_skill(path: &Path, shared_dir: Option<&Path>) -> bool {
+    shared_dir.is_some_and(|dir| path.parent() == Some(dir))
+        && fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_dir())
+        && has_skill_file(path)
+}
 
-        if !skills_path.exists() || !skills_path.is_dir() {
-            continue;
-        }
-
-        // Iterate through entries in the agent's skills directory
-        for entry in fs::read_dir(&skills_path)? {
+fn visit_directories(root: &Path, mut visit: impl FnMut(fs::DirEntry)) -> Result<()> {
+    if root.is_dir() {
+        for entry in fs::read_dir(root).with_context(|| format!("Scanning {}", root.display()))? {
             let entry = entry?;
-            let path = entry.path();
-            let skill_name = entry.file_name().to_string_lossy().to_string();
-
-            // Skip if it's a skillshub-managed skill name
-            if managed_skill_names.contains(&skill_name) {
-                continue;
+            // DirEntry::file_type does not follow symlinks.
+            if entry.file_type()?.is_dir() {
+                visit(entry);
             }
-
-            // Skip symlinks - we only track real directories as sources
-            // Symlinks are either skillshub-managed or created by us for syncing
-            if path.is_symlink() {
-                continue;
-            }
-
-            // Skip if not a directory
-            if !path.is_dir() {
-                continue;
-            }
-
-            // Get canonical path to detect duplicates
-            let source_path = path.canonicalize().unwrap_or_else(|_| path.clone());
-
-            // Skip if we've already seen this source path
-            if seen_sources.contains(&source_path) {
-                continue;
-            }
-            seen_sources.insert(source_path.clone());
-
-            // Skip if already tracked as external
-            if is_external_skill(db, &skill_name) {
-                continue;
-            }
-
-            let external = ExternalSkill {
-                name: skill_name.clone(),
-                source_agent: agent_name.clone(),
-                source_path,
-                discovered_at: Utc::now(),
-            };
-
-            add_external_skill(db, &skill_name, external);
-            new_external.push(skill_name.clone());
         }
     }
+    Ok(())
+}
 
-    // Collect all external skills (including previously discovered ones)
-    let all_external: Vec<ExternalSkill> = db.external.values().cloned().collect();
+pub(super) fn discover_external_skills(
+    agents: &[AgentInfo],
+    db: &mut Database,
+    shared_dir: Option<&Path>,
+) -> Result<Vec<String>> {
+    let mut new_external = Vec::new();
+    let managed_names: HashSet<&str> = db.installed.values().map(|skill| skill.skill.as_str()).collect();
+    let mut scan = |root: &Path, source: &str| {
+        visit_directories(root, |entry| {
+            let path = entry.path();
+            if source == SHARED_SKILLS_SOURCE && !has_skill_file(&path) {
+                return;
+            }
+            let source_path = path.canonicalize().unwrap_or(path);
+            // Real directories reached through an alias of their parent have
+            // the same canonical name, so the name check also deduplicates them.
+            let Some(name) = source_path.file_name() else {
+                return;
+            };
+            let name = name.to_string_lossy();
+            if managed_names.contains(name.as_ref()) || db.external.contains_key(name.as_ref()) {
+                return;
+            }
+            let name = name.into_owned();
+            db.external.insert(
+                name.clone(),
+                ExternalSkill {
+                    name: name.clone(),
+                    source_agent: source.to_owned(),
+                    source_path,
+                    discovered_at: Utc::now(),
+                },
+            );
+            new_external.push(name);
+        })
+    };
 
-    Ok((new_external, all_external))
+    if let Some(dir) = shared_dir {
+        scan(dir, SHARED_SKILLS_SOURCE)?;
+    }
+    for agent in agents {
+        scan(&agent.path.join(agent.skills_subdir), agent.name)?;
+    }
+    Ok(new_external)
+}
+
+/// List project skills without reading or updating global state.
+pub fn external_scan_project(project: &Path) -> Result<()> {
+    let project = project
+        .canonicalize()
+        .with_context(|| format!("Resolving project directory {}", project.display()))?;
+    ensure!(project.is_dir(), "Not a project directory: {}", project.display());
+    let mut skills = BTreeSet::new();
+    let mut scan = |root: PathBuf| -> Result<()> {
+        let Ok(root) = root.canonicalize() else {
+            return Ok(());
+        };
+        if root.starts_with(&project) {
+            visit_directories(&root, |entry| {
+                let path = entry.path();
+                if has_skill_file(&path) {
+                    skills.insert(path);
+                }
+            })?;
+        }
+        Ok(())
+    };
+
+    scan(project.join(SHARED_SKILLS_DIR))?;
+    for &(_, agent_dir, subdir) in KNOWN_AGENTS {
+        scan(project.join(agent_dir).join(subdir))?;
+    }
+    // Vercel uses these project paths for OpenClaw and Kiro CLI.
+    scan(project.join("skills"))?;
+    scan(project.join(".kiro/skills"))?;
+
+    if skills.is_empty() {
+        println!("No external project skills found in {}.", project.display());
+    } else {
+        println!("External project skills in {}:", project.display());
+        for path in skills {
+            println!("  {}", path.strip_prefix(&project)?.display());
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -251,23 +284,16 @@ mod tests {
     #[test]
     fn test_discover_external_skills_empty() {
         let temp = TempDir::new().unwrap();
-        let skillshub_dir = temp.path().join("skillshub");
-        fs::create_dir_all(&skillshub_dir).unwrap();
-
         let mut db = Database::default();
-        let agents: Vec<AgentInfo> = vec![];
-
-        let (new_external, all_external) = discover_external_skills_internal(&agents, &mut db, &skillshub_dir).unwrap();
+        let new_external = discover_external_skills(&[], &mut db, Some(temp.path())).unwrap();
 
         assert!(new_external.is_empty());
-        assert!(all_external.is_empty());
+        assert!(db.external.is_empty());
     }
 
     #[test]
     fn test_discover_external_skills_finds_real_dirs() {
         let temp = TempDir::new().unwrap();
-        let skillshub_dir = temp.path().join("skillshub");
-        fs::create_dir_all(&skillshub_dir).unwrap();
 
         // Create a mock agent directory with an external skill
         let agent_path = temp.path().join(".claude");
@@ -282,10 +308,42 @@ mod tests {
         }];
 
         let mut db = Database::default();
-        let (new_external, all_external) = discover_external_skills_internal(&agents, &mut db, &skillshub_dir).unwrap();
+        let new_external = discover_external_skills(&agents, &mut db, None).unwrap();
+        assert_eq!(new_external, ["my-external-skill"]);
+        assert_eq!(
+            db.external["my-external-skill"].source_path,
+            external_skill_path.canonicalize().unwrap()
+        );
+    }
 
-        assert_eq!(new_external.len(), 1);
-        assert!(new_external.contains(&"my-external-skill".to_string()));
-        assert_eq!(all_external.len(), 1);
+    #[test]
+    fn shared_source_precedes_agent_copy_but_preserves_tracked_names() {
+        let temp = TempDir::new().unwrap();
+        let shared = temp.path().join(".agents/skills");
+        let agent = AgentInfo {
+            name: ".claude",
+            path: temp.path().join(".claude"),
+            skills_subdir: "skills",
+        };
+        let agent_skills = agent.path.join(agent.skills_subdir);
+        create_skill_dir(&agent_skills.join("tracked"));
+        create_skill_dir(&shared.join("tracked"));
+        let mut db = Database::default();
+        discover_external_skills(std::slice::from_ref(&agent), &mut db, None).unwrap();
+
+        create_skill_dir(&agent_skills.join("new-skill"));
+        create_skill_dir(&shared.join("new-skill"));
+        assert_eq!(
+            discover_external_skills(&[agent], &mut db, Some(&shared)).unwrap(),
+            ["new-skill"]
+        );
+        assert_eq!(
+            db.external["tracked"].source_path,
+            agent_skills.join("tracked").canonicalize().unwrap()
+        );
+        assert_eq!(
+            db.external["new-skill"].source_path,
+            shared.join("new-skill").canonicalize().unwrap()
+        );
     }
 }

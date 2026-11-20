@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand, ValueEnum};
+use std::path::PathBuf;
 
 /// Skillshub - A package manager for AI coding agent skills
 #[derive(Parser)]
@@ -171,8 +172,12 @@ pub enum ExternalCommands {
     /// List all discovered external skills
     List,
 
-    /// Scan agent directories for external skills
-    Scan,
+    /// Scan for external skills
+    Scan {
+        /// Scan this project without changing global state
+        #[arg(long, value_name = "DIR")]
+        project: Option<PathBuf>,
+    },
 
     /// Stop tracking an external skill (does not delete the skill)
     Forget {

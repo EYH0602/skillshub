@@ -189,11 +189,6 @@ pub fn is_external_skill(db: &Database, name: &str) -> bool {
     db.external.contains_key(name)
 }
 
-/// Add an external skill to the database
-pub fn add_external_skill(db: &mut Database, name: &str, skill: ExternalSkill) {
-    db.external.insert(name.to_string(), skill);
-}
-
 /// Remove an external skill from the database
 pub fn remove_external_skill(db: &mut Database, name: &str) -> Option<ExternalSkill> {
     db.external.remove(name)
@@ -349,7 +344,7 @@ mod tests {
             discovered_at: Utc::now(),
         };
 
-        add_external_skill(&mut db, "my-external-skill", external);
+        db.external.insert("my-external-skill".to_string(), external);
         assert!(is_external_skill(&db, "my-external-skill"));
 
         let retrieved = db.external.get("my-external-skill");
